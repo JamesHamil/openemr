@@ -1,0 +1,28 @@
+{
+  "workspace": "/Users/james/openemr/agentforge-presentation",
+  "pptx": "/Users/james/openemr/agentforge-presentation/output/output.pptx",
+  "checks": {
+    "pptx_package": {
+      "slide_count": 8,
+      "media_count": 0,
+      "chart_count": 0,
+      "zero_byte_media": [],
+      "invalid_png_media": [],
+      "placeholder_text": [],
+      "debug_line_colors": [],
+      "slide_numbers": [],
+      "warnings": [],
+      "failures": []
+    },
+    "output_hygiene": {
+      "output_dir": "/Users/james/openemr/agentforge-presentation/output",
+      "unexpected_files": [
+        "agentforge-architecture-defense.pptx"
+      ]
+    }
+  },
+  "failures": [
+    "output/ contains non-deliverable files: agentforge-architecture-defense.pptx"
+  ],
+  "warnings": []
+}

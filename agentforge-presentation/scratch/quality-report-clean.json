@@ -1,0 +1,24 @@
+{
+  "workspace": "/tmp/agentforge-presentation-quality",
+  "pptx": "/tmp/agentforge-presentation-quality/output/output.pptx",
+  "checks": {
+    "pptx_package": {
+      "slide_count": 8,
+      "media_count": 0,
+      "chart_count": 0,
+      "zero_byte_media": [],
+      "invalid_png_media": [],
+      "placeholder_text": [],
+      "debug_line_colors": [],
+      "slide_numbers": [],
+      "warnings": [],
+      "failures": []
+    },
+    "output_hygiene": {
+      "output_dir": "/tmp/agentforge-presentation-quality/output",
+      "unexpected_files": []
+    }
+  },
+  "failures": [],
+  "warnings": []
+}

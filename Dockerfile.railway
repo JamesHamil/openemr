@@ -1,0 +1,8 @@
+FROM openemr/openemr:latest
+
+LABEL org.opencontainers.image.title="AgentForge OpenEMR MVP"
+LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge MVP submission artifacts from the fork."
+
+RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge-mvp
+
+COPY README.md AUDIT.md USER.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md /var/www/localhost/htdocs/openemr/agentforge-mvp/
