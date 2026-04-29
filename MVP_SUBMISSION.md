@@ -21,17 +21,6 @@ Public URL: https://openemr-production-5533.up.railway.app
 
 The Railway deployment is configured as an OpenEMR service backed by a MariaDB service. The deployment is demo-only and is not production hardened. It must not be used with real PHI.
 
-## Presentation Outline
-
-1. Show the repository URL and public Railway URL.
-2. Explain that this checkpoint is foundation-only, not a working agent yet.
-3. Defend the user choice: hospitalist preparing for rounds.
-4. Explain the key decision that OpenEMR remains the clinical trust boundary.
-5. Explain the hybrid sidecar architecture and why it is not multi-agent.
-6. Discuss verification, failure modes, and the speed-versus-completeness trade-off.
-7. Describe the hardest deployment and design problems encountered and how they were solved.
-8. Close with the next implementation phase: module shell, sidecar mock, verification contract, eval smoke tests, and PHI-safe observability.
-
 ## Current Delivery Limits
 
 - No working AI agent is implemented in this checkpoint.
