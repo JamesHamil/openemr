@@ -31,6 +31,7 @@ MVP documents:
 - [USER.md](USER.md): compatibility pointer for the assignment filename inconsistency.
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): submission checklist, demo outline, limitations, and next steps.
+- [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md): 3-5 minute MVP demo video narration.
 
 The planned architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. A future in-repo sidecar will handle AI orchestration and verification, but it will receive only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
 

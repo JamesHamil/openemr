@@ -8,6 +8,7 @@
 - User document: [`USERS.md`](USERS.md) and compatibility pointer [`USER.md`](USER.md)
 - Architecture document: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - README setup and deployment notes: [`README.md`](README.md)
+- Demo video script: [`VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md)
 
 ## MVP Status
 
@@ -23,13 +24,16 @@ The Railway deployment is configured as an OpenEMR service backed by a MariaDB s
 
 ## Demo Video Outline
 
-1. Open the public Railway URL and show OpenEMR is reachable.
+1. Show the repository URL and public Railway URL.
 2. Explain that the MVP stage is foundation-only, not a working agent.
-3. Summarize the audit's most important finding: OpenEMR must remain the clinical trust boundary.
-4. Walk through the target user: hospitalist preparing for rounds.
-5. Explain the planned workflows: chart brief, follow-up questions, missing-data warnings, and refusal of treatment directives.
-6. Explain the architecture: OpenEMR module builds a bounded evidence bundle; sidecar transforms and verifies; every claim must cite source evidence.
-7. Close with next steps for Early Submission: implement module shell, sidecar mock, verification contract, eval smoke tests, and trace logging.
+3. Defend the user choice: hospitalist preparing for rounds.
+4. Explain the key decision that OpenEMR remains the clinical trust boundary.
+5. Explain the hybrid sidecar architecture and why it is not multi-agent.
+6. Discuss verification, failure modes, and the speed-versus-completeness trade-off.
+7. Describe the hardest deployment and design problems encountered and how they were solved.
+8. Close with next steps for Early Submission: module shell, sidecar mock, verification contract, eval smoke tests, and PHI-safe observability.
+
+The full 3-5 minute narration script is in [`VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md). It is structured around key decisions, trade-offs, hardest problems, and clear technical explanation of the architecture.
 
 ## Known Limitations
 
