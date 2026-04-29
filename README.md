@@ -36,7 +36,55 @@ The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR o
 
 This checkpoint is demo-data-only. Do not use real PHI with the Railway deployment, and do not treat the deployment as production HIPAA-ready.
 
-Local development can use the standard OpenEMR Docker instructions in [DOCKER_README.md](DOCKER_README.md). The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime.
+### Local OpenEMR With Sample Patients
+
+The local audit and architecture work should be done against a runnable OpenEMR instance with realistic synthetic patient data. This project uses OpenEMR's standard Docker development environment plus imported Synthea C-CDA patients, which avoids hand-written SQL and keeps the sample data clearly synthetic.
+
+1. Start the OpenEMR development environment:
+
+   ```shell
+   cd docker/development-easy
+   docker compose up
+   ```
+
+2. Open the local app at `http://localhost:8300/` or `https://localhost:9300/`.
+
+3. Log in with the standard local development credentials:
+
+   ```text
+   username: admin
+   password: pass
+   ```
+
+4. Download synthetic C-CDA sample patients from [Synthea](https://synthetichealth.github.io/synthea/). Use the C-CDA download, unzip it, and keep a few patient `.xml` files for the demo dataset.
+
+5. In OpenEMR, enable the C-CDA workflow if it is not already visible:
+
+   ```text
+   Admin -> Globals -> Connectors -> Enable C-CDA Service
+   ```
+
+   Choose `Care Coordination Only` or `Both`, then save. If the module is still hidden, go to `Modules -> Manage Modules` and enable the Carecoordination module and any required dependencies.
+
+6. Import the synthetic patients:
+
+   ```text
+   Modules -> Carecoordination -> Import -> CCDA or QRDA Cat I
+   ```
+
+   Upload a Synthea `.xml` file. When the imported row appears, choose `Add as new patient`.
+
+7. Verify the data is usable for analysis:
+
+   ```text
+   Patient/Client -> New/Search
+   ```
+
+   Search for the imported patient name and confirm that demographics, medications, problems, allergies, vitals, and notes imported well enough to support audit and architecture testing.
+
+Do not use real PHI in local development. The sample-patient workflow is intentionally synthetic and is meant to support system analysis, demo preparation, and later evidence-bundle testing.
+
+The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime.
 
 [OpenEMR](https://open-emr.org) is a Free and Open Source electronic health records and medical practice management application. It features fully integrated electronic health records, practice management, scheduling, electronic billing, internationalization, free support, a vibrant community, and a whole lot more. It runs on Windows, Linux, Mac OS X, and many other platforms.
 

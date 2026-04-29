@@ -14,10 +14,6 @@ The initial delivered agent capability is read-only. It will not write notes, or
 
 Verification is the safety core. The model must return structured claims with source IDs, source record types, source field paths or note spans, extracted values, and source timestamps. A verification layer checks that each factual clinical claim is supported by the supplied evidence bundle, not merely that it cites a real source. Unsupported claims are removed, rewritten as uncertainty, or refused. The UI should display source chips or expandable citations so the hospitalist can inspect the evidence. Missing or stale data must be stated transparently; the assistant must not convert absent evidence into a confident clinical conclusion.
 
-For the current checkpoint, a mocked or stubbed sidecar path is acceptable if it lives inside the OpenEMR fork and uses the same response contract as the real implementation path. This is not a shortcut around safety; it is a way to demonstrate the intended trust boundaries before the full OpenEMR data adapters are complete. Demo data only is the current operating constraint. The result is a narrow but durable project direction: a clinical co-pilot that starts small, makes its evidence visible, fails safely, and expands through eval-driven implementation rather than uncontrolled agent scope.
-
-This plan traces directly to the audit and user documents: `AUDIT.md` identifies the trust, data quality, performance, and compliance constraints, while `USERS.md` constrains the agent to a hospitalist pre-rounding workflow. Any added capability should link back to a use case in `USERS.md` and a safety/control finding in `AUDIT.md`.
-
 ## Executive Position
 
 The wrong project direction is a broad chatbot that appears fluent but cannot prove what it says. In a clinical setting, that is worse than an incomplete checkpoint because it trains the user to trust unverified text.
