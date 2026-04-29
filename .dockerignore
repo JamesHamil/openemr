@@ -6,3 +6,12 @@
 !USERS.md
 !ARCHITECTURE.md
 !MVP_SUBMISSION.md
+!PRD.md
+!Dockerfile.sidecar
+!agentforge/
+!agentforge/**
+!interface/
+!interface/modules/
+!interface/modules/custom_modules/
+!interface/modules/custom_modules/agentforge/
+!interface/modules/custom_modules/agentforge/**

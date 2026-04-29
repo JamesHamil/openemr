@@ -4,5 +4,10 @@ LABEL org.opencontainers.image.title="AgentForge OpenEMR Clinical Co-Pilot"
 LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge project checkpoint artifacts from the fork."
 
 RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge
+RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
 
-COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md /var/www/localhost/htdocs/openemr/agentforge/
+COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md PRD.md /var/www/localhost/htdocs/openemr/agentforge/
+COPY agentforge/contracts /var/www/localhost/htdocs/openemr/agentforge/contracts
+COPY agentforge/evals /var/www/localhost/htdocs/openemr/agentforge/evals
+COPY agentforge/COST_ANALYSIS.md /var/www/localhost/htdocs/openemr/agentforge/COST_ANALYSIS.md
+COPY interface/modules/custom_modules/agentforge /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge

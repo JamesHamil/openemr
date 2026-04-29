@@ -20,7 +20,7 @@
 
 ## AgentForge Clinical Co-Pilot
 
-This fork is being used for the AgentForge Clinical Co-Pilot project. The current submission checkpoint demonstrates the committed project direction: a hospitalist-focused, OpenEMR-integrated clinical assistant with bounded evidence retrieval, source-backed verification, and OpenEMR-owned authorization. The live deployment is an early checkpoint, not yet a working AI agent.
+This fork is being used for the AgentForge Clinical Co-Pilot project. The current submission checkpoint demonstrates the committed project direction: a hospitalist-focused, OpenEMR-integrated clinical assistant with bounded evidence retrieval, source-backed verification, and OpenEMR-owned authorization. The repository now includes the first agent execution slice, and the Railway environment runs OpenEMR, MariaDB, and the AgentForge sidecar in mock mode for deterministic demo behavior.
 
 Current deployed checkpoint: https://openemr-production-5533.up.railway.app
 
@@ -29,9 +29,13 @@ Project documents:
 - [AUDIT.md](AUDIT.md): security, performance, architecture, data quality, and compliance audit findings.
 - [USERS.md](USERS.md): target hospitalist user, workflow, and use cases.
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
+- [PRD.md](PRD.md): execution source of truth for the Clinical Co-Pilot build.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
+- [agentforge/COST_ANALYSIS.md](agentforge/COST_ANALYSIS.md): AI cost and scale analysis.
 
-The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The chosen in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, but the sidecar receives only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
+The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, but the sidecar receives only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
+
+The first execution slice now includes an OpenEMR custom module shell at `interface/modules/custom_modules/agentforge/`, shared contracts under `agentforge/contracts/`, a FastAPI sidecar under `agentforge/sidecar/`, and eval smoke tests under `agentforge/evals/`. The public Railway OpenEMR deployment remains demo-data-only and should not be treated as production HIPAA-ready. Real OpenAI mode is intentionally disabled unless a server-side `OPENAI_API_KEY` and review-ready configuration are supplied.
 
 This checkpoint is demo-data-only. Do not use real PHI with the Railway deployment, and do not treat the deployment as production HIPAA-ready.
 
@@ -83,7 +87,21 @@ The local audit and architecture work should be done against a runnable OpenEMR 
 
 Do not use real PHI in local development. The sample-patient workflow is intentionally synthetic and is meant to support system analysis, demo preparation, and later evidence-bundle testing.
 
-The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime.
+The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime. Railway is configured with separate OpenEMR, MariaDB, and `agentforge-sidecar` services; OpenEMR reaches the sidecar over Railway private networking.
+
+### AgentForge Runtime Configuration
+
+The OpenEMR module calls the sidecar when these server-side variables are configured:
+
+```text
+AGENTFORGE_SIDECAR_URL=http://agentforge-sidecar:8000
+AGENTFORGE_SIGNING_SECRET=<shared-secret>
+AGENTFORGE_MODE=mock
+OPENAI_API_KEY=<real-mode-only>
+AGENTFORGE_OPENAI_MODEL=gpt-4.1-mini
+```
+
+Use `AGENTFORGE_MODE=mock` for deterministic demos, `real` for OpenAI-backed responses, and `off` for rollback. Browser code never receives the sidecar signing secret or OpenAI API key.
 
 [OpenEMR](https://open-emr.org) is a Free and Open Source electronic health records and medical practice management application. It features fully integrated electronic health records, practice management, scheduling, electronic billing, internationalization, free support, a vibrant community, and a whole lot more. It runs on Windows, Linux, Mac OS X, and many other platforms.
 

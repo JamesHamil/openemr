@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge.response.v1",
+  "type": "object",
+  "required": ["schema_version", "answer", "sections", "claims", "sources", "warnings", "blocked_claims", "verification_status", "trace_id"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "agentforge.response.v1" },
+    "answer": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "claim_ids"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "claim_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      }
+    },
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "claim_type", "source_ids", "support_status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "claim_type": { "type": "string" },
+          "source_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "support_status": { "enum": ["supported", "unsupported", "conflicting", "blocked"] }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "record_type", "display", "recorded_at", "field_path", "extracted_value"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "record_type": { "type": "string" },
+          "display": { "type": "string" },
+          "recorded_at": { "type": "string" },
+          "field_path": { "type": "string" },
+          "extracted_value": { "type": "string" }
+        }
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
+    "blocked_claims": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "verification_status": { "enum": ["verified", "partial", "refused", "failed"] },
+    "trace_id": { "type": "string" }
+  }
+}

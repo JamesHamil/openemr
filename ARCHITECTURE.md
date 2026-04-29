@@ -4,7 +4,7 @@
 
 The Clinical Co-Pilot is a hospitalist rounding assistant embedded inside OpenEMR. The committed project direction is intentionally narrow at the start: a read-only, source-backed retrieved chart brief for a selected demo patient, followed by patient-scoped follow-up questions. The goal is not to build a broad medical chatbot. The goal is to build a trustworthy architecture for clinical AI: OpenEMR remains the system of record, OpenEMR is the only component with direct clinical-data authority, AI behavior is isolated behind an in-repo FastAPI sidecar, and every factual clinical claim is verified against retrieved chart data before it reaches the physician.
 
-This checkpoint is not a deployed working agent yet. The current deliverables are the public OpenEMR deployment, the audit findings in `AUDIT.md`, the target user and use cases in `USERS.md`, and this architecture defense. The sidecar, OpenEMR module shell, mock response flow, eval runner, and observability implementation are the next implementation phase of the same architecture, not a change in direction.
+The repository now includes the first execution slice of this architecture: an OpenEMR module shell, shared request and response contracts, a FastAPI sidecar with real/mock/off modes, a verifier, smoke evals, and cost analysis. The public OpenEMR deployment remains demo-data-only and should not be treated as production HIPAA-ready unless the sidecar service and server-side secrets are configured in that environment.
 
 The central architecture choice is an in-repo hybrid sidecar. OpenEMR owns authentication, browser session, user identity, patient context, CSRF/session checks, role-based access control, audit alignment, and all direct access to clinical records. The AI sidecar lives inside the same forked OpenEMR repository, but it is a separate runtime boundary responsible for model orchestration, structured output validation, verification, observability, and eval execution. The sidecar does not receive database credentials, OpenEMR API tokens, broad service credentials, or delegated clinical-data permissions. It receives only signed, short-lived, minimum-necessary evidence bundles that OpenEMR has already assembled and ACL-filtered. It may transform that evidence into a verified response, but it may not fetch, expand, cache, or authorize clinical data.
 
@@ -144,7 +144,7 @@ The team constraint is that the agent must be built inside the same repository a
 - `agentforge/sidecar/`: FastAPI sidecar, model orchestration, verification, tracing, evals, and mocked response path.
 - `agentforge/contracts/`: shared request and response schemas.
 - `agentforge/evals/`: eval dataset and runners.
-- `AUDIT.md`, `USERS.md`, and `ARCHITECTURE.md`: root-level project documents.
+- `AUDIT.md`, `USERS.md`, `ARCHITECTURE.md`, and `PRD.md`: root-level project documents.
 
 The sidecar is a separate runtime boundary, not a separate repository. This keeps development inside OpenEMR while avoiding a design where experimental LLM orchestration is tangled directly into core EHR PHP flows.
 

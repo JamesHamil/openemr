@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "agentforge.request.v1",
+  "type": "object",
+  "required": ["schema_version", "request_id", "conversation_id", "expires_at", "purpose", "scope", "message", "evidence_bundle"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "agentforge.request.v1" },
+    "request_id": { "type": "string" },
+    "conversation_id": { "type": "string" },
+    "expires_at": { "type": "string" },
+    "purpose": { "type": "string" },
+    "scope": {
+      "type": "object",
+      "required": ["user_hash", "patient_hash", "encounter_hash", "evidence_bundle_id"],
+      "additionalProperties": false,
+      "properties": {
+        "user_hash": { "type": "string" },
+        "patient_hash": { "type": "string" },
+        "encounter_hash": { "type": "string" },
+        "evidence_bundle_id": { "type": "string" }
+      }
+    },
+    "message": { "type": "string" },
+    "evidence_bundle": {
+      "type": "object",
+      "required": ["id", "created_at", "patient_context", "sources", "adapter_status"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "created_at": { "type": "string" },
+        "patient_context": {
+          "type": "object",
+          "required": ["patient_id", "encounter_id"],
+          "additionalProperties": false,
+          "properties": {
+            "patient_id": { "type": "string" },
+            "encounter_id": { "type": "string" }
+          }
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "record_type", "recorded_at", "field_path", "value"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string" },
+              "record_type": { "type": "string" },
+              "recorded_at": { "type": "string" },
+              "field_path": { "type": "string" },
+              "value": { "type": "string" },
+              "note_span": { "type": "string" }
+            }
+          }
+        },
+        "adapter_status": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["adapter", "status"],
+            "additionalProperties": false,
+            "properties": {
+              "adapter": { "type": "string" },
+              "status": { "enum": ["success", "partial", "timeout", "unavailable", "failed"] },
+              "reason": { "type": "string" },
+              "latency_ms": { "type": "integer" }
+            }
+          }
+        }
+      }
+    }
+  }
+}
