@@ -2,32 +2,32 @@
 
 ## Executive Summary
 
-The Clinical Co-Pilot is a hospitalist rounding assistant embedded inside OpenEMR. The first defensible slice is intentionally narrow: a read-only, source-backed retrieved chart brief for a selected demo patient, followed by patient-scoped follow-up questions. The goal is not to build a broad medical chatbot. The goal is to prove a trustworthy architecture for clinical AI: OpenEMR remains the system of record, OpenEMR is the only component with direct clinical-data authority, AI behavior is isolated behind an in-repo FastAPI sidecar, and every factual clinical claim is verified against retrieved chart data before it reaches the physician.
+The Clinical Co-Pilot is a hospitalist rounding assistant embedded inside OpenEMR. The committed project direction is intentionally narrow at the start: a read-only, source-backed retrieved chart brief for a selected demo patient, followed by patient-scoped follow-up questions. The goal is not to build a broad medical chatbot. The goal is to build a trustworthy architecture for clinical AI: OpenEMR remains the system of record, OpenEMR is the only component with direct clinical-data authority, AI behavior is isolated behind an in-repo FastAPI sidecar, and every factual clinical claim is verified against retrieved chart data before it reaches the physician.
 
-This MVP submission is the foundation stage described in the AgentForge requirements, not a deployed working agent. The current deliverables are the public OpenEMR deployment, the audit findings in `AUDIT.md`, the target user and use cases in `USERS.md`, and this architecture plan. The sidecar, OpenEMR module shell, mock response flow, eval runner, and observability implementation are planned next.
+This checkpoint is not a deployed working agent yet. The current deliverables are the public OpenEMR deployment, the audit findings in `AUDIT.md`, the target user and use cases in `USERS.md`, and this architecture defense. The sidecar, OpenEMR module shell, mock response flow, eval runner, and observability implementation are the next implementation phase of the same architecture, not a change in direction.
 
-The central architecture choice is an in-repo hybrid sidecar. OpenEMR owns authentication, browser session, user identity, patient context, CSRF/session checks, role-based access control, audit alignment, and all direct access to clinical records. The AI sidecar lives inside the same forked OpenEMR repository, but it is a separate runtime boundary responsible for model orchestration, structured output validation, verification, observability, and eval execution. The sidecar does not receive database credentials, OpenEMR API tokens, broad service credentials, or delegated clinical-data permissions. For v1, it receives only signed, short-lived, minimum-necessary evidence bundles that OpenEMR has already assembled and ACL-filtered. It may transform that evidence into a verified response, but it may not fetch, expand, cache, or authorize clinical data.
+The central architecture choice is an in-repo hybrid sidecar. OpenEMR owns authentication, browser session, user identity, patient context, CSRF/session checks, role-based access control, audit alignment, and all direct access to clinical records. The AI sidecar lives inside the same forked OpenEMR repository, but it is a separate runtime boundary responsible for model orchestration, structured output validation, verification, observability, and eval execution. The sidecar does not receive database credentials, OpenEMR API tokens, broad service credentials, or delegated clinical-data permissions. It receives only signed, short-lived, minimum-necessary evidence bundles that OpenEMR has already assembled and ACL-filtered. It may transform that evidence into a verified response, but it may not fetch, expand, cache, or authorize clinical data.
 
 This separation is deliberate. Putting all AI orchestration directly into OpenEMR's PHP runtime would reduce deployment complexity, but it would tightly couple experimental model behavior to the EHR and make tracing, evals, and iteration harder. Building a standalone chatbot would be faster to demo, but it would fail the core project requirement: the agent must live inside the OpenEMR codebase, respect the EHR workflow, and avoid becoming a second unmanaged clinical data surface. The hybrid model keeps OpenEMR as the trusted gateway while allowing the AI runtime to be isolated and testable.
 
-The v1 agent is read-only. It will not write notes, orders, diagnoses, medication changes, billing records, or tasks. A hospitalist may use it to understand the retrieved chart faster, but not to delegate clinical decisions. The first capability is a chart brief for rounds: active problems, recent changes, notable labs/vitals, current medications, allergies, documented pending items, warnings about missing data, and citations to the underlying records. This should not imply complete inpatient MAR, order, or task coverage unless those OpenEMR adapters are actually implemented. Follow-up questions are allowed only inside the same patient context and only when the answer can be grounded in the evidence bundle.
+The initial delivered agent capability is read-only. It will not write notes, orders, diagnoses, medication changes, billing records, or tasks. A hospitalist may use it to understand the retrieved chart faster, but not to delegate clinical decisions. The first capability is a chart brief for rounds: active problems, recent changes, notable labs/vitals, current medications, allergies, documented pending items, warnings about missing data, and citations to the underlying records. This should not imply complete inpatient MAR, order, or task coverage unless those OpenEMR adapters are actually implemented. Follow-up questions are allowed only inside the same patient context and only when the answer can be grounded in the evidence bundle.
 
 Verification is the safety core. The model must return structured claims with source IDs, source record types, source field paths or note spans, extracted values, and source timestamps. A verification layer checks that each factual clinical claim is supported by the supplied evidence bundle, not merely that it cites a real source. Unsupported claims are removed, rewritten as uncertainty, or refused. The UI should display source chips or expandable citations so the hospitalist can inspect the evidence. Missing or stale data must be stated transparently; the assistant must not convert absent evidence into a confident clinical conclusion.
 
-For the one-day architecture defense, a mocked or stubbed sidecar path is acceptable if it lives inside the OpenEMR fork and uses the same response contract as the future real implementation. This is not a shortcut around safety; it is a way to demonstrate the intended trust boundaries before the full OpenEMR data adapters are complete. Demo data only is the operating constraint. The result is a narrow but defensible MVP: a clinical co-pilot that starts small, makes its evidence visible, fails safely, and can be expanded through eval-driven implementation rather than uncontrolled agent scope.
+For the current checkpoint, a mocked or stubbed sidecar path is acceptable if it lives inside the OpenEMR fork and uses the same response contract as the real implementation path. This is not a shortcut around safety; it is a way to demonstrate the intended trust boundaries before the full OpenEMR data adapters are complete. Demo data only is the current operating constraint. The result is a narrow but durable project direction: a clinical co-pilot that starts small, makes its evidence visible, fails safely, and expands through eval-driven implementation rather than uncontrolled agent scope.
 
-This plan traces directly to the MVP audit and user documents: `AUDIT.md` identifies the trust, data quality, performance, and compliance constraints, while `USERS.md` constrains the agent to a hospitalist pre-rounding workflow. Any future capability should link back to a use case in `USERS.md` and a safety/control finding in `AUDIT.md`.
+This plan traces directly to the audit and user documents: `AUDIT.md` identifies the trust, data quality, performance, and compliance constraints, while `USERS.md` constrains the agent to a hospitalist pre-rounding workflow. Any added capability should link back to a use case in `USERS.md` and a safety/control finding in `AUDIT.md`.
 
 ## Executive Position
 
-The wrong MVP is a broad chatbot that appears fluent but cannot prove what it says. In a clinical setting, that is worse than an incomplete demo because it trains the user to trust unverified text.
+The wrong project direction is a broad chatbot that appears fluent but cannot prove what it says. In a clinical setting, that is worse than an incomplete checkpoint because it trains the user to trust unverified text.
 
-The defended MVP is intentionally narrow:
+The defended direction is intentionally narrow:
 
 - Target one user: a hospitalist preparing for inpatient rounds.
 - Target one workflow: a patient-specific retrieved chart brief for rounds.
 - Target one safety pattern: every clinical claim must cite a source record and the supporting field, value, or note span.
-- Target one implementation mode: read-only, demo-data-only, built inside the OpenEMR fork, with mocked data allowed only behind the real response contract.
+- Target one implementation mode: read-only, demo-data-only until compliance gates are met, built inside the OpenEMR fork, with mocked data allowed only behind the real response contract.
 
 The first supported use cases are:
 
@@ -64,7 +64,7 @@ flowchart LR
         Guard["Sidecar constraints<br/>no DB credentials<br/>no OpenEMR API token<br/>no callback tools"]
     end
 
-    OpenAI["OpenAI Structured Output<br/>v1 model provider"]
+    OpenAI["OpenAI Structured Output<br/>initial model provider"]
     Response["Verified Response<br/>verified | partial | refused | failed"]
 
     Physician -->|selected patient + message| Panel
@@ -112,7 +112,7 @@ flowchart LR
    - Source code is committed inside the OpenEMR fork, not maintained as a separate product repository.
    - Recommended repo location: `agentforge/sidecar/`.
    - Runs a single sidecar orchestrator, not a multi-agent system.
-   - Uses OpenAI as the v1 model provider because structured outputs fit the schema-first verification design.
+   - Uses OpenAI as the initial model provider because structured outputs fit the schema-first verification design.
    - Keeps the model provider behind a sidecar abstraction so Claude or open-source models can be evaluated later.
    - Runs model calls, structured output parsing, verification, tracing, and eval execution.
    - Does not receive database credentials, OpenEMR API tokens, delegated tool permissions, or broad service credentials.
@@ -137,7 +137,7 @@ flowchart LR
 
 6. **Observability layer**
    - Requires local PHI-safe logs for every request.
-   - Allows Langfuse for demo-data-only tracing or future redacted/self-hosted usage.
+   - Allows Langfuse for demo-data-only tracing or later redacted/self-hosted usage.
    - Tracks model calls, evidence collector status, token usage, cost, verification status, and failures.
 
 ### Repository Placement
@@ -148,7 +148,7 @@ The team constraint is that the agent must be built inside the same repository a
 - `agentforge/sidecar/`: FastAPI sidecar, model orchestration, verification, tracing, evals, and mocked response path.
 - `agentforge/contracts/`: shared request and response schemas.
 - `agentforge/evals/`: eval dataset and runners.
-- `AUDIT.md`, `USERS.md`, `USER.md`, and `ARCHITECTURE.md`: root-level submission documents.
+- `AUDIT.md`, `USERS.md`, and `ARCHITECTURE.md`: root-level project documents.
 
 The sidecar is a separate runtime boundary, not a separate repository. This keeps development inside OpenEMR while avoiding a design where experimental LLM orchestration is tangled directly into core EHR PHP flows.
 
@@ -162,17 +162,17 @@ The module should not send the entire chart to the model. OpenEMR should build a
 
 ### Agent Runtime, State, and Model Choice
 
-The v1 runtime is a single sidecar orchestrator rather than a multi-agent system. The workflow does not require autonomous agent collaboration; it requires controlled evidence transformation, schema validation, verification, and observability. Avoiding multi-agent fanout also reduces latency, cost, and audit complexity.
+The runtime is a single sidecar orchestrator rather than a multi-agent system. The workflow does not require autonomous agent collaboration; it requires controlled evidence transformation, schema validation, verification, and observability. Avoiding multi-agent fanout also reduces latency, cost, and audit complexity.
 
 Conversation state is scoped to `conversation_id + patient_id + encounter_id + evidence_bundle_id`. Follow-up questions may reuse the same evidence bundle only while the OpenEMR patient and encounter context remain unchanged. Switching patients or encounters resets clinical context and requires OpenEMR to build a fresh evidence bundle. The sidecar may keep operational trace metadata, but it must not persist raw chart evidence as conversational memory.
 
-OpenAI is the default v1 model provider because structured output support fits the requirement that every clinical claim pass through schema-first verification. This is a provider choice, not a medical safety claim. The sidecar should keep model access behind a provider abstraction so the team can later compare Claude or open-source models using the same contracts and evals.
+OpenAI is the default initial model provider because structured output support fits the requirement that every clinical claim pass through schema-first verification. This is a provider choice, not a medical safety claim. The sidecar keeps model access behind a provider abstraction so the team can later compare Claude or open-source models using the same contracts and evals.
 
 External dependencies should stay narrow: OpenAI for model calls and optional demo-only Langfuse for telemetry. All clinical data must come from OpenEMR-owned evidence collectors, not external clinical APIs or model-side retrieval.
 
 Performance is accuracy-first. The system should aim for a first useful verified response quickly, but it must never skip verification to appear fast. Evidence collectors should have explicit timeouts; timed-out or unavailable collectors produce a `partial` response with visible warnings instead of blocking indefinitely or silently omitting categories.
 
-The v1 engineering target is a first useful verified response in roughly 10 seconds when the sidecar and core collectors are healthy. If a complete evidence bundle would take longer, the system should return a partial verified answer with collector warnings rather than wait for chart exhaustion. A fast unverified answer is not acceptable.
+The initial engineering target is a first useful verified response in roughly 10 seconds when the sidecar and core collectors are healthy. If a complete evidence bundle would take longer, the system should return a partial verified answer with collector warnings rather than wait for chart exhaustion. A fast unverified answer is not acceptable.
 
 ### Request Flow
 
@@ -198,13 +198,13 @@ An all-PHP implementation would reduce deployment surface area, but it would mak
 
 A standalone chatbot or separate agent repository would be faster to build, but it would not naturally inherit OpenEMR's session, patient context, and access model. It would also miss the project team's instruction to live and learn inside OpenEMR. It would risk becoming a second place where clinical data is copied, cached, and queried outside the EHR workflow.
 
-### Best Fit for the One-Day MVP
+### Best Fit for the Committed Direction
 
-The in-repo sidecar can start mocked while preserving the final contract. The architecture defense can show the real boundary and response schema even before every OpenEMR data adapter is complete.
+The in-repo sidecar can start mocked while preserving the real contract. The architecture defense can show the boundary and response schema even before every OpenEMR data adapter is complete.
 
 The mocked path should still use the same `RoundingContextBundle` and verified response schema as the future implementation. A mock that skips the evidence bundle would demonstrate a chatbot, not the defended architecture.
 
-This also matches the team and sprint constraints. OpenEMR is a large unfamiliar PHP application, while the AI orchestration, eval, and structured-output workflow can move faster in a small Python FastAPI sidecar. The design limits the amount of OpenEMR code that must change immediately while still forcing the team to integrate through OpenEMR's session, ACL, audit, and module patterns.
+This also matches the team and sprint constraints. OpenEMR is a large unfamiliar PHP application, while the AI orchestration, eval, and structured-output workflow can move faster in a small Python FastAPI sidecar. The design limits the amount of OpenEMR code that must change in the initial implementation phase while still forcing the team to integrate through OpenEMR's session, ACL, audit, and module patterns.
 
 ## Trust Boundaries
 
@@ -333,7 +333,7 @@ Sidecar request body:
       {
         "adapter": "pending_orders_or_tasks",
         "status": "unavailable",
-        "reason": "No v1 OpenEMR adapter implemented"
+        "reason": "No OpenEMR adapter implemented yet"
       }
     ]
   }
@@ -362,11 +362,11 @@ The sidecar cannot stream unverified model text directly to the physician. It mu
 - Treatment recommendations are refused or reframed as record-backed issues for physician review.
 - Adapter gaps are surfaced as retrieval limitations, not hidden behind confident summaries.
 - Chart text, including note text, is untrusted input. Instructions embedded in notes cannot override system policy, developer policy, OpenEMR authorization, or verifier rules.
-- V1 does not use numeric confidence as a substitute for evidence. A factual claim is supported, unsupported, conflicting, or not stated.
+- The verifier does not use numeric confidence as a substitute for evidence. A factual claim is supported, unsupported, conflicting, or not stated.
 
 ### Domain Constraints
 
-The first enforced clinical constraints are source attribution, stale or missing data warnings, conflict surfacing, and refusal of treatment directives. Medication, allergy, lab, vital, problem, and note claims must cite the retrieved record and the supporting field, value, or note span. Dosage thresholds, interaction checking, and institution-specific clinical rules are future extensions unless backed by explicit OpenEMR evidence and eval coverage.
+The first enforced clinical constraints are source attribution, stale or missing data warnings, conflict surfacing, and refusal of treatment directives. Medication, allergy, lab, vital, problem, and note claims must cite the retrieved record and the supporting field, value, or note span. Dosage thresholds, interaction checking, and institution-specific clinical rules are later expansions unless backed by explicit OpenEMR evidence and eval coverage.
 
 ### Example Safe Language
 
@@ -389,11 +389,11 @@ The first enforced clinical constraints are source attribution, stale or missing
 | Ambiguous clinical question | Answer only the record-backed portion and ask for clarification |
 | Prompt injection in chart text | Treat it as patient-record content, ignore instructions, and verify claims normally |
 | Rate limit exceeded | Return a controlled retry-later error before calling the sidecar |
-| Sidecar unhealthy | Return a controlled unavailable message or route to mock/off mode for demo-only workflows |
+| Sidecar unhealthy | Return a controlled unavailable message or route to mock/off mode for checkpoint workflows |
 | LLM malformed output | Retry once with structured schema; otherwise return controlled error |
 | Verification failure | Block, rewrite, or refuse unsupported answer |
 | Observability failure | Continue clinical response but log local operational warning |
-| Sidecar requests additional data | Reject the request because v1 sidecar has no clinical data callback channel |
+| Sidecar requests additional data | Reject the request because the sidecar has no clinical data callback channel |
 
 ## Observability
 
@@ -413,13 +413,13 @@ The sidecar trace should include:
 
 The OpenEMR audit event should include the user, patient, action name such as `agentforge-chart-brief`, success/failure, and the sidecar trace ID. This keeps clinical accountability in OpenEMR while allowing the sidecar to stay operationally observable without becoming a PHI log store.
 
-Local PHI-safe logging is the required baseline. Langfuse is acceptable for the one-day demo because the project uses demo data only, and it is useful for LLM traces, sessions, observations, token/cost tracking, and eval scoring. Before any real PHI use, Langfuse or any third-party telemetry would require redaction, self-hosting or a compliant vendor relationship, BAA coverage, retention controls, and an explicit policy that raw chart text is not exported by default.
+Local PHI-safe logging is the required baseline. Langfuse is acceptable for the current demo checkpoint because the project uses demo data only, and it is useful for LLM traces, sessions, observations, token/cost tracking, and eval scoring. Before any real PHI use, Langfuse or any third-party telemetry would require redaction, self-hosting or a compliant vendor relationship, BAA coverage, retention controls, and an explicit policy that raw chart text is not exported by default.
 
-For operations, the sidecar should expose a health check and structured error counters. Real-time alerting is not required for the one-day architecture defense, but the production path should alert on repeated sidecar failures, verification failures, collector timeouts, and cost anomalies.
+For operations, the sidecar should expose a health check and structured error counters. Real-time alerting is not required for the current checkpoint, but the production path should alert on repeated sidecar failures, verification failures, collector timeouts, and cost anomalies.
 
 ## Evaluation Plan
 
-The MVP eval suite should include cases that a happy-path demo would miss:
+The eval suite should include cases that a happy-path demo would miss:
 
 1. **Complete chart brief:** verifies summary quality and source-bound coverage.
 2. **Missing labs:** confirms the agent says data is missing rather than inventing.
@@ -432,17 +432,17 @@ The MVP eval suite should include cases that a happy-path demo would miss:
 
 Pass/fail should be based on source-bound support, safe language, refusal correctness, adapter gap transparency, and absence of unsupported clinical claims.
 
-Ground truth for v1 evals should come from the mocked or retrieved evidence bundle itself: expected source IDs, expected supported claims, expected missing-data warnings, and expected refusals. Automated evals should score contract adherence and safety-critical behavior. Human review can still judge clinical usefulness and wording, but it should not replace automated checks for source support and refusal correctness.
+Ground truth for initial evals should come from the mocked or retrieved evidence bundle itself: expected source IDs, expected supported claims, expected missing-data warnings, and expected refusals. Automated evals should score contract adherence and safety-critical behavior. Human review can still judge clinical usefulness and wording, but it should not replace automated checks for source support and refusal correctness.
 
 ### Testing and CI
 
 The first automated tests should cover schema validation for `RoundingContextBundle`, verifier behavior for supported and unsupported claims, and module-to-sidecar request/response contract compatibility. Integration tests should confirm OpenEMR builds or loads an evidence bundle, signs the sidecar request, receives a verified response, and maps `verified`, `partial`, `refused`, and `failed` statuses to controlled UI behavior.
 
-CI should run lightweight schema tests and eval smoke tests before merging agent changes. The smoke set should include missing data, unsupported citation, prompt injection in a note, unauthorized patient, collector failure, and unsupported prescribing request. Broader regression evals can grow after the MVP, but the verification contract should be tested from the start.
+CI should run lightweight schema tests and eval smoke tests before merging agent changes. The smoke set should include missing data, unsupported citation, prompt injection in a note, unauthorized patient, collector failure, and unsupported prescribing request. Broader regression evals can grow after the checkpoint, but the verification contract should be tested from the start.
 
 ## Cost and Scale Awareness
 
-For tomorrow's MVP, cost should be tracked per request, not guessed at the end. The conservative cost constraint is one primary OpenAI structured-output call plus one schema-repair retry at most. The sidecar should not use multi-agent fanout, background model calls, or separate judge calls for the first slice unless an eval shows they are necessary. Each trace should record model name, input tokens, output tokens, evidence source count, collector count, estimated cost, and verification retries.
+For the initial implementation phase, cost should be tracked per request, not guessed at the end. The conservative cost constraint is one primary OpenAI structured-output call plus one schema-repair retry at most. The sidecar should not use multi-agent fanout, background model calls, or separate judge calls for the first slice unless an eval shows they are necessary. Each trace should record model name, input tokens, output tokens, evidence source count, collector count, estimated cost, and verification retries.
 
 Scaling assumptions:
 
@@ -453,9 +453,9 @@ Scaling assumptions:
 
 This is intentionally not calculated as `cost per token * users`; hospital usage depends on number of patients rounded, evidence collectors per patient, cache hit rate, model choice, verification retries, and observability retention.
 
-## Deployment Plan for One-Day MVP
+## Deployment Plan
 
-The deployment target should optimize for demo reliability while explicitly avoiding a production HIPAA claim.
+The current deployment target should optimize for checkpoint reliability while explicitly avoiding a production HIPAA claim.
 
 Services:
 
@@ -465,7 +465,7 @@ Services:
 - Optional OpenEMR-side Redis/cache service for non-sidecar patient snapshots with explicit retention limits.
 - Local PHI-safe logging by default; demo-only Langfuse or self-hosted tracing if time allows.
 
-The sidecar should have a health check endpoint so OpenEMR can fail closed with a controlled unavailable response. The rollback path is to disable the AgentForge module or route it to mock/off mode; rollback should not require database migration reversal for the v1 read-only slice.
+The sidecar should have a health check endpoint so OpenEMR can fail closed with a controlled unavailable response. The rollback path is to disable the AgentForge module or route it to mock/off mode; rollback should not require database migration reversal for the initial read-only slice.
 
 LLM API keys and sidecar signing secrets must be server-side configuration only. They are never committed, exposed in the browser, stored in client-side JavaScript, or logged in traces.
 
@@ -473,11 +473,11 @@ CI/CD for agent updates should require schema tests and eval smoke tests before 
 
 ## Release and Maintenance Plan
 
-The code remains inside the OpenEMR fork under licensing compatible with the project. Documentation should explain local setup, demo-data-only operation, safety limitations, and how to disable the module. No secrets, real PHI, raw prompt traces, or raw chart exports should be committed. Community engagement for v1 is documentation-first; upstreaming or broader release should wait until the safety contract, evals, and module boundaries are stable.
+The code remains inside the OpenEMR fork under licensing compatible with the project. Documentation should explain local setup, demo-data-only operation, safety limitations, and how to disable the module. No secrets, real PHI, raw prompt traces, or raw chart exports should be committed. Community engagement for the initial implementation is documentation-first; upstreaming or broader release should wait until the safety contract, evals, and module boundaries are stable.
 
 Iteration should be eval-driven. New capabilities require a linked user use case, an evidence collector or adapter contract, verifier coverage, and at least one eval case. Long-term maintenance should include periodic review of prompts, schemas, eval failures, audit logs, model costs, and user feedback from clinicians.
 
-## MVP Scope by Tomorrow
+## Checkpoint Scope And Implementation Path
 
 Must have:
 
@@ -512,4 +512,3 @@ Explicitly out of scope:
 - **Mocked data may look less complete:** Accepted if the mock includes a realistic evidence bundle, adapter statuses, citations, and verification output rather than only a polished answer.
 - **Third-party tracing is constrained:** Accepted because PHI-safe local logs are the baseline; Langfuse is demo-only unless redacted, self-hosted, or contractually covered.
 - **Verification may reduce fluency:** Accepted because clinical correctness and traceability matter more than conversational polish.
-

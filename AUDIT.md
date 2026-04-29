@@ -1,4 +1,4 @@
-# AgentForge MVP Audit
+# AgentForge Clinical Co-Pilot Audit
 
 ## Executive Summary
 
@@ -8,11 +8,11 @@ The most important security risk is over-disclosure of Protected Health Informat
 
 The most important reliability risk is unsupported clinical claims. In this domain, a fluent answer is not enough; every factual statement must trace back to a specific chart source. A citation label alone is also not enough, because a model can cite a real source that does not support the sentence. The verification layer must check source IDs, record types, field paths or note spans, extracted values, and timestamps before a response reaches the physician.
 
-Performance risk is real because the user workflow is time-sensitive. A hospitalist preparing for rounds may have less than two minutes before entering a patient room. However, speed cannot come from skipping verification. The MVP architecture should optimize for a first useful verified response, with explicit warnings when collectors are unavailable or data is missing, stale, or conflicting.
+Performance risk is real because the user workflow is time-sensitive. A hospitalist preparing for rounds may have less than two minutes before entering a patient room. However, speed cannot come from skipping verification. The project architecture should optimize for a first useful verified response, with explicit warnings when collectors are unavailable or data is missing, stale, or conflicting.
 
 The data quality audit shows that OpenEMR's data is broad and clinically rich, but not uniformly normalized for AI summarization. Notes, medications, labs, allergies, vitals, problems, encounters, documents, and orders live in different parts of the application and may have different completeness, recency, and formatting. Missing fields and stale records are not edge cases; they are expected clinical realities and must be surfaced in the assistant's output.
 
-The compliance conclusion is that the MVP should remain demo-data-only and should not claim production HIPAA readiness. Real PHI use would require vendor BAAs, retention policy, breach response procedures, access review, logging controls, and a stronger deployment posture. The MVP can still be valuable if it proves the safe foundation: OpenEMR-owned authorization, bounded evidence retrieval, source-bound verification, visible failure modes, and audit-aware design.
+The compliance conclusion is that the current checkpoint should remain demo-data-only and should not claim production HIPAA readiness. Real PHI use would require vendor BAAs, retention policy, breach response procedures, access review, logging controls, and a stronger deployment posture. This safety constraint does not change the project direction; it defines the compliance gate the full Clinical Co-Pilot must clear before real patient data is used.
 
 ## Security Audit
 
@@ -21,13 +21,13 @@ The compliance conclusion is that the MVP should remain demo-data-only and shoul
 - Patient and encounter IDs supplied by the UI must be treated as hints only; the server must validate them against the active OpenEMR session and permissions.
 - The sidecar must not receive database credentials, OpenEMR API tokens, or delegated tool permissions.
 - Chart text must be treated as untrusted input. Prompt injection inside notes cannot override system policy, authorization rules, or verification requirements.
-- Demo data only is acceptable for MVP. Real PHI requires a separate compliance review before any external LLM or third-party tracing is used.
+- Demo data only is the current checkpoint constraint. Real PHI requires a separate compliance review before any external LLM or third-party tracing is used.
 
 ## Performance Audit
 
 - The target workflow is latency-sensitive: a hospitalist preparing for rounds needs useful context quickly.
 - OpenEMR contains multiple data surfaces, so exhaustive chart retrieval can be slower than the clinical moment allows.
-- The MVP should prioritize bounded, high-signal evidence for the first answer: demographics, active problems, allergies, current medications, recent notes, recent labs, vitals, and visible adapter gaps.
+- The project should prioritize bounded, high-signal evidence for the first answer: demographics, active problems, allergies, current medications, recent notes, recent labs, vitals, and visible adapter gaps.
 - Verification is non-negotiable and should not be skipped for speed.
 - Collector timeouts should produce a partial verified answer with warnings rather than silent omission.
 
@@ -50,7 +50,7 @@ The compliance conclusion is that the MVP should remain demo-data-only and shoul
 ## Compliance And Regulatory Audit
 
 - PHI handling affects storage, transmission, logging, retention, and access control.
-- The MVP must not use real PHI and must not claim production HIPAA readiness.
+- The current checkpoint must not use real PHI and must not claim production HIPAA readiness.
 - Before real PHI use, LLM and telemetry providers would need appropriate contractual coverage, including BAA considerations.
 - Logs and traces must avoid raw chart text by default. Operational traces should use hashes, bundle IDs, trace IDs, latencies, token counts, and verification statuses.
 - OpenEMR should remain the patient-linked audit system. The sidecar should maintain only PHI-safe operational traces.

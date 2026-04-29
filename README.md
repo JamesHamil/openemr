@@ -18,26 +18,25 @@
 
 # OpenEMR
 
-## AgentForge Clinical Co-Pilot MVP
+## AgentForge Clinical Co-Pilot
 
-This fork is being used for the AgentForge Clinical Co-Pilot project. The MVP submission is a foundation milestone, not a working AI agent. It documents the audit, target user, use cases, deployment, and architecture plan needed before building the OpenEMR-integrated AI layer.
+This fork is being used for the AgentForge Clinical Co-Pilot project. The current submission checkpoint demonstrates the committed project direction: a hospitalist-focused, OpenEMR-integrated clinical assistant with bounded evidence retrieval, source-backed verification, and OpenEMR-owned authorization. The live deployment is an early checkpoint, not yet a working AI agent.
 
-Deployed demo app: https://openemr-production-5533.up.railway.app
+Current deployed checkpoint: https://openemr-production-5533.up.railway.app
 
-MVP documents:
+Project documents:
 
 - [AUDIT.md](AUDIT.md): security, performance, architecture, data quality, and compliance audit findings.
 - [USERS.md](USERS.md): target hospitalist user, workflow, and use cases.
-- [USER.md](USER.md): compatibility pointer for the assignment filename inconsistency.
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
-- [MVP_SUBMISSION.md](MVP_SUBMISSION.md): submission checklist, demo outline, limitations, and next steps.
-- [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md): 3-5 minute MVP demo video narration.
+- [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
+- [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md): 3-5 minute checkpoint demo video narration.
 
-The planned architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. A future in-repo sidecar will handle AI orchestration and verification, but it will receive only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
+The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The chosen in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, but the sidecar receives only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
 
-This project is demo-data-only. Do not use real PHI with the MVP deployment, and do not treat the Railway deployment as production HIPAA-ready.
+This checkpoint is demo-data-only. Do not use real PHI with the Railway deployment, and do not treat the deployment as production HIPAA-ready.
 
-Local development can use the standard OpenEMR Docker instructions in [DOCKER_README.md](DOCKER_README.md). The MVP Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted deployment is built from this fork while preserving the known OpenEMR runtime.
+Local development can use the standard OpenEMR Docker instructions in [DOCKER_README.md](DOCKER_README.md). The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime.
 
 [OpenEMR](https://open-emr.org) is a Free and Open Source electronic health records and medical practice management application. It features fully integrated electronic health records, practice management, scheduling, electronic billing, internationalization, free support, a vibrant community, and a whole lot more. It runs on Windows, Linux, Mac OS X, and many other platforms.
 
