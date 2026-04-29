@@ -8,7 +8,6 @@
 - User document: [`USERS.md`](USERS.md)
 - Architecture document: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 - README setup and deployment notes: [`README.md`](README.md)
-- Demo video script: [`VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md)
 
 ## Checkpoint Status
 
@@ -22,7 +21,7 @@ Public URL: https://openemr-production-5533.up.railway.app
 
 The Railway deployment is configured as an OpenEMR service backed by a MariaDB service. The deployment is demo-only and is not production hardened. It must not be used with real PHI.
 
-## Demo Video Outline
+## Presentation Outline
 
 1. Show the repository URL and public Railway URL.
 2. Explain that this checkpoint is foundation-only, not a working agent yet.
@@ -32,8 +31,6 @@ The Railway deployment is configured as an OpenEMR service backed by a MariaDB s
 6. Discuss verification, failure modes, and the speed-versus-completeness trade-off.
 7. Describe the hardest deployment and design problems encountered and how they were solved.
 8. Close with the next implementation phase: module shell, sidecar mock, verification contract, eval smoke tests, and PHI-safe observability.
-
-The full 3-5 minute narration script is in [`VIDEO_SCRIPT.md`](VIDEO_SCRIPT.md). It is structured around key decisions, trade-offs, hardest problems, and clear technical explanation of the architecture.
 
 ## Current Delivery Limits
 

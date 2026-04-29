@@ -5,4 +5,4 @@ LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge proj
 
 RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge
 
-COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md VIDEO_SCRIPT.md /var/www/localhost/htdocs/openemr/agentforge/
+COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md /var/www/localhost/htdocs/openemr/agentforge/
