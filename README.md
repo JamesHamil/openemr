@@ -30,7 +30,6 @@ Project documents:
 - [USERS.md](USERS.md): target hospitalist user, workflow, and use cases.
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
-- [VIDEO_SCRIPT.md](VIDEO_SCRIPT.md): 3-5 minute checkpoint demo video narration.
 
 The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The chosen in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, but the sidecar receives only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
 
