@@ -1,6 +1,8 @@
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
+from agentforge_sidecar import observability
 from agentforge_sidecar.mock_provider import mock_response
 from agentforge_sidecar.schemas import (
     AdapterStatus,
@@ -14,6 +16,41 @@ from agentforge_sidecar.schemas import (
 from agentforge_sidecar.service import handle_chat
 from agentforge_sidecar.settings import Settings
 from agentforge_sidecar.verifier import verify_response
+
+
+class _FakeObservation:
+    def __init__(self, kwargs):
+        self.kwargs = kwargs
+        self.updates = []
+
+    def update(self, **kwargs):
+        self.updates.append(kwargs)
+
+
+class _FakeObservationContext:
+    def __init__(self, observation):
+        self.observation = observation
+
+    def __enter__(self):
+        return self.observation
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class _FakeLangfuse:
+    def __init__(self):
+        self.observations = []
+
+    def start_as_current_observation(self, **kwargs):
+        observation = _FakeObservation(kwargs)
+        self.observations.append(observation)
+        return _FakeObservationContext(observation)
+
+
+@contextmanager
+def _fake_propagate_attributes(**_kwargs):
+    yield
 
 
 def request_with_source(value="Pneumonia", record_type="problem", source_id="problem-1", field_path="lists.title"):
@@ -259,6 +296,33 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(verified.verification_status, "partial")
         self.assertIn("based on retrieved chart evidence", verified.answer.lower())
         self.assertNotIn("removed unsupported generated claims", verified.answer.lower())
+
+    def test_langfuse_metadata_mode_does_not_capture_phi_payloads(self):
+        request = request_with_source("Pneumonia")
+        fake_langfuse = _FakeLangfuse()
+        settings = Settings(mode="mock", langfuse_enabled=True, langfuse_capture_payloads=False)
+
+        with patch.object(observability, "_load_langfuse", return_value=(fake_langfuse, _fake_propagate_attributes)):
+            response, _trace = handle_chat(request, settings)
+
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(len(fake_langfuse.observations), 1)
+        root = fake_langfuse.observations[0]
+        self.assertNotIn("message", root.kwargs["input"])
+        self.assertTrue(root.updates)
+        self.assertNotIn("answer", root.updates[-1]["output"])
+
+    def test_langfuse_payload_capture_is_explicit(self):
+        request = request_with_source("Pneumonia")
+        fake_langfuse = _FakeLangfuse()
+        settings = Settings(mode="mock", langfuse_enabled=True, langfuse_capture_payloads=True)
+
+        with patch.object(observability, "_load_langfuse", return_value=(fake_langfuse, _fake_propagate_attributes)):
+            response, _trace = handle_chat(request, settings)
+
+        root = fake_langfuse.observations[0]
+        self.assertEqual(root.kwargs["input"]["message"], request.message)
+        self.assertEqual(root.updates[-1]["output"]["answer"], response.answer)
 
 
 if __name__ == "__main__":

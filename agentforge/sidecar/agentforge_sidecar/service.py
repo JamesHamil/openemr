@@ -4,6 +4,7 @@ import time
 import uuid
 
 from .mock_provider import mock_response
+from .observability import chat_observation, update_chat_observation
 from .openai_provider import openai_response
 from .schemas import AgentForgeRequest, AgentForgeResponse, TraceRecord, WarningItem
 from .settings import Settings
@@ -20,115 +21,120 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     planning_latency_ms = None
     compose_latency_ms = None
 
-    try:
-        if any(status.adapter == "authorization" and status.status == "failed" for status in request.evidence_bundle.adapter_status):
-            response = AgentForgeResponse(
-                answer="I cannot answer for an unauthorized patient context.",
-                sections=[],
-                claims=[],
-                sources=[],
-                warnings=[
-                    WarningItem(
-                        code="unauthorized_patient_refused",
-                        message="OpenEMR did not authorize this patient context.",
-                    )
-                ],
-                blocked_claims=[],
-                verification_status="refused",
-                trace_id=trace_id,
-            )
-            fallback_reason = "unauthorized_patient_refused"
-        elif is_treatment_directive(request.message):
-            response = AgentForgeResponse(
-                answer=(
-                    "I cannot provide treatment directives. I can summarize retrieved chart evidence "
-                    "and record-backed issues for physician review."
-                ),
-                sections=[],
-                claims=[],
-                sources=[],
-                warnings=[
-                    WarningItem(
-                        code="treatment_directive_refused",
-                        message="The request asked for a treatment action and was reframed for physician review.",
-                    )
-                ],
-                blocked_claims=[],
-                verification_status="refused",
-                trace_id=trace_id,
-            )
-            fallback_reason = "treatment_directive_refused"
-        elif settings.mode == "off":
-            response = AgentForgeResponse(
-                answer="Clinical Co-Pilot is currently disabled.",
-                sections=[],
-                claims=[],
-                sources=[],
-                warnings=[
-                    WarningItem(
-                        code="agentforge_off",
-                        message="The sidecar is configured in off mode.",
-                    )
-                ],
-                blocked_claims=[],
-                verification_status="failed",
-                trace_id=trace_id,
-            )
-            fallback_reason = "agentforge_off"
-        elif settings.mode == "real":
-            response, provider_diagnostics = openai_response(request, trace_id, settings.model)
-            tool_call_count = provider_diagnostics.tool_call_count
-            selected_source_count = provider_diagnostics.selected_source_count
-            fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
-            planning_latency_ms = provider_diagnostics.planning_latency_ms
-            compose_latency_ms = provider_diagnostics.compose_latency_ms
-        else:
-            response = mock_response(request, trace_id)
-
-        if response.verification_status not in {"refused", "failed"}:
-            response = verify_response(request, response)
-            if response.verification_status == "partial" and not response.claims and response.blocked_claims:
-                fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
-    except Exception as exc:
-        error = str(exc)
-        fallback_reason = fallback_reason or "sidecar_exception"
-        response = AgentForgeResponse(
-            answer=_focused_uncertainty_answer(request.message),
-            sections=[],
-            claims=[],
-            sources=[],
-            warnings=[
-                WarningItem(
-                    code="sidecar_exception",
-                    message="The sidecar returned a controlled partial fallback.",
+    with chat_observation(request, settings, trace_id) as chat_span:
+        try:
+            if any(
+                status.adapter == "authorization" and status.status == "failed"
+                for status in request.evidence_bundle.adapter_status
+            ):
+                response = AgentForgeResponse(
+                    answer="I cannot answer for an unauthorized patient context.",
+                    sections=[],
+                    claims=[],
+                    sources=[],
+                    warnings=[
+                        WarningItem(
+                            code="unauthorized_patient_refused",
+                            message="OpenEMR did not authorize this patient context.",
+                        )
+                    ],
+                    blocked_claims=[],
+                    verification_status="refused",
+                    trace_id=trace_id,
                 )
-            ],
-            blocked_claims=[],
-            verification_status="partial",
-            trace_id=trace_id,
-        )
+                fallback_reason = "unauthorized_patient_refused"
+            elif is_treatment_directive(request.message):
+                response = AgentForgeResponse(
+                    answer=(
+                        "I cannot provide treatment directives. I can summarize retrieved chart evidence "
+                        "and record-backed issues for physician review."
+                    ),
+                    sections=[],
+                    claims=[],
+                    sources=[],
+                    warnings=[
+                        WarningItem(
+                            code="treatment_directive_refused",
+                            message="The request asked for a treatment action and was reframed for physician review.",
+                        )
+                    ],
+                    blocked_claims=[],
+                    verification_status="refused",
+                    trace_id=trace_id,
+                )
+                fallback_reason = "treatment_directive_refused"
+            elif settings.mode == "off":
+                response = AgentForgeResponse(
+                    answer="Clinical Co-Pilot is currently disabled.",
+                    sections=[],
+                    claims=[],
+                    sources=[],
+                    warnings=[
+                        WarningItem(
+                            code="agentforge_off",
+                            message="The sidecar is configured in off mode.",
+                        )
+                    ],
+                    blocked_claims=[],
+                    verification_status="failed",
+                    trace_id=trace_id,
+                )
+                fallback_reason = "agentforge_off"
+            elif settings.mode == "real":
+                response, provider_diagnostics = openai_response(request, trace_id, settings)
+                tool_call_count = provider_diagnostics.tool_call_count
+                selected_source_count = provider_diagnostics.selected_source_count
+                fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
+                planning_latency_ms = provider_diagnostics.planning_latency_ms
+                compose_latency_ms = provider_diagnostics.compose_latency_ms
+            else:
+                response = mock_response(request, trace_id)
 
-    latency_ms = int((time.perf_counter() - started) * 1000)
-    trace = TraceRecord(
-        trace_id=trace_id,
-        request_id=request.request_id,
-        conversation_id=request.conversation_id,
-        mode=settings.mode,
-        verification_status=response.verification_status,
-        source_count=len(request.evidence_bundle.sources),
-        collector_statuses=request.evidence_bundle.adapter_status,
-        blocked_claim_count=len(response.blocked_claims),
-        estimated_input_tokens=_rough_tokens(request.model_dump_json()),
-        estimated_output_tokens=_rough_tokens(response.model_dump_json()),
-        estimated_cost_usd=0.0,
-        latency_ms=latency_ms,
-        error=error,
-        tool_call_count=tool_call_count,
-        selected_source_count=selected_source_count,
-        fallback_reason=fallback_reason,
-        planning_latency_ms=planning_latency_ms,
-        compose_latency_ms=compose_latency_ms,
-    )
+            if response.verification_status not in {"refused", "failed"}:
+                response = verify_response(request, response)
+                if response.verification_status == "partial" and not response.claims and response.blocked_claims:
+                    fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
+        except Exception as exc:
+            error = str(exc)
+            fallback_reason = fallback_reason or "sidecar_exception"
+            response = AgentForgeResponse(
+                answer=_focused_uncertainty_answer(request.message),
+                sections=[],
+                claims=[],
+                sources=[],
+                warnings=[
+                    WarningItem(
+                        code="sidecar_exception",
+                        message="The sidecar returned a controlled partial fallback.",
+                    )
+                ],
+                blocked_claims=[],
+                verification_status="partial",
+                trace_id=trace_id,
+            )
+
+        latency_ms = int((time.perf_counter() - started) * 1000)
+        trace = TraceRecord(
+            trace_id=trace_id,
+            request_id=request.request_id,
+            conversation_id=request.conversation_id,
+            mode=settings.mode,
+            verification_status=response.verification_status,
+            source_count=len(request.evidence_bundle.sources),
+            collector_statuses=request.evidence_bundle.adapter_status,
+            blocked_claim_count=len(response.blocked_claims),
+            estimated_input_tokens=_rough_tokens(request.model_dump_json()),
+            estimated_output_tokens=_rough_tokens(response.model_dump_json()),
+            estimated_cost_usd=0.0,
+            latency_ms=latency_ms,
+            error=error,
+            tool_call_count=tool_call_count,
+            selected_source_count=selected_source_count,
+            fallback_reason=fallback_reason,
+            planning_latency_ms=planning_latency_ms,
+            compose_latency_ms=compose_latency_ms,
+        )
+        update_chat_observation(chat_span, response, trace, settings)
     return response, trace
 
 

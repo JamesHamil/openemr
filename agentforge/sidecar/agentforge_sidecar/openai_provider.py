@@ -4,7 +4,9 @@ import json
 import time
 from dataclasses import dataclass
 
+from .observability import generation_observation, update_generation_observation
 from .schemas import AgentForgeRequest, AgentForgeResponse, WarningItem
+from .settings import Settings
 from .tool_agent import ToolPhaseDiagnostics, run_tool_phase
 
 
@@ -39,7 +41,8 @@ class ProviderDiagnostics:
     compose_latency_ms: int = 0
 
 
-def openai_response(request: AgentForgeRequest, trace_id: str, model: str) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
+def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
+    model = settings.model
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover - depends on runtime dependency
@@ -52,7 +55,33 @@ def openai_response(request: AgentForgeRequest, trace_id: str, model: str) -> tu
         )
     try:
         client = OpenAI()
-        tool_plan, tool_diag = run_tool_phase(client, request, model)
+        with generation_observation(
+            "agentforge.tool_phase",
+            settings,
+            model,
+            {
+                "message": request.message,
+                "source_count": len(request.evidence_bundle.sources),
+                "adapter_statuses": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+            },
+        ) as tool_observation:
+            tool_plan, tool_diag = run_tool_phase(client, request, model)
+            update_generation_observation(
+                tool_observation,
+                settings,
+                {
+                    "selected_source_ids": tool_plan.selected_source_ids,
+                    "selected_source_count": tool_diag.selected_source_count,
+                    "drafted_claim_count": len(tool_plan.drafted_claims),
+                    "focus": tool_plan.focus,
+                },
+                metadata={
+                    "tool_call_count": tool_diag.tool_call_count,
+                    "planning_latency_ms": tool_diag.planning_latency_ms,
+                    "fallback_reason": tool_diag.fallback_reason,
+                    "invalid_source_id_count": tool_diag.invalid_source_id_count,
+                },
+            )
         selected_sources = _selected_sources(request, tool_plan.selected_source_ids)
         if not selected_sources:
             warnings = []
@@ -93,26 +122,48 @@ def openai_response(request: AgentForgeRequest, trace_id: str, model: str) -> tu
             "drafted_claims": [claim.model_dump() for claim in tool_plan.drafted_claims],
         }
 
-        compose_started = time.perf_counter()
-        compose_response = client.responses.parse(
-            model=model,
-            max_output_tokens=2600,
-            input=[
-                {"role": "system", "content": COMPOSE_PROMPT},
+        with generation_observation(
+            "agentforge.compose_response",
+            settings,
+            model,
+            {
+                "message": request.message,
+                "selected_source_ids": compose_payload["selected_source_ids"],
+                "selected_sources": compose_payload["selected_sources"],
+                "drafted_claims": compose_payload["drafted_claims"],
+            },
+        ) as compose_observation:
+            compose_started = time.perf_counter()
+            compose_response = client.responses.parse(
+                model=model,
+                max_output_tokens=2600,
+                input=[
+                    {"role": "system", "content": COMPOSE_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Return a JSON response matching AgentForgeResponse using only this selected-evidence payload:\n"
+                            + json.dumps(compose_payload, separators=(",", ":"))
+                        ),
+                    },
+                ],
+                text_format=AgentForgeResponse,
+            )
+            parsed = compose_response.output_parsed
+            if not parsed:
+                raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
+            compose_latency_ms = int((time.perf_counter() - compose_started) * 1000)
+            update_generation_observation(
+                compose_observation,
+                settings,
                 {
-                    "role": "user",
-                    "content": (
-                        "Return a JSON response matching AgentForgeResponse using only this selected-evidence payload:\n"
-                        + json.dumps(compose_payload, separators=(",", ":"))
-                    ),
+                    "verification_status": parsed.verification_status,
+                    "claim_count": len(parsed.claims),
+                    "source_count": len(parsed.sources),
+                    "answer": parsed.answer,
                 },
-            ],
-            text_format=AgentForgeResponse,
-        )
-        parsed = compose_response.output_parsed
-        if not parsed:
-            raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
-        compose_latency_ms = int((time.perf_counter() - compose_started) * 1000)
+                metadata={"compose_latency_ms": compose_latency_ms},
+            )
         normalized = _limit_response(parsed.model_copy(update={"trace_id": trace_id}), selected_sources)
         if tool_diag.invalid_source_id_count > 0:
             normalized = normalized.model_copy(

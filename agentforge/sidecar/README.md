@@ -25,6 +25,22 @@ AGENTFORGE_SIDECAR_URL=http://sidecar-host:8000
 AGENTFORGE_SIGNING_SECRET=<shared secret>
 ```
 
+## Langfuse Observability
+
+Langfuse tracing is optional and disabled by default. Metadata-only tracing is the default when enabled; raw user messages, chart evidence, prompts, model outputs, and answers are not sent unless payload capture is explicitly enabled.
+
+```text
+AGENTFORGE_LANGFUSE_ENABLED=true
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://us.cloud.langfuse.com
+LANGFUSE_TRACING_ENVIRONMENT=production
+AGENTFORGE_LANGFUSE_TAGS=openemr,clinical-copilot
+AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=false
+```
+
+Use `AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=true` only in an approved environment where sending request/response payloads to Langfuse is acceptable. For short-lived jobs, `AGENTFORGE_LANGFUSE_FLUSH_AT_END=true` forces a flush after each `/v1/chat` request; leave it off for normal long-running FastAPI workers.
+
 ## Tests
 
 ```shell

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI, Header, HTTPException, Request
 
+from .observability import flush_langfuse
 from .schemas import AgentForgeRequest, AgentForgeResponse
 from .security import verify_signature
 from .service import handle_chat
@@ -29,4 +30,5 @@ async def chat(
     agent_request = AgentForgeRequest.model_validate(body)
     response, trace = handle_chat(agent_request, settings)
     print(trace.model_dump_json())
+    flush_langfuse(settings)
     return response

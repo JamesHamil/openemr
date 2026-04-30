@@ -11,6 +11,11 @@ class Settings:
     signing_secret: str = "dev-agentforge-signing-secret"
     openai_api_key: str = ""
     request_ttl_seconds: int = 300
+    langfuse_enabled: bool = False
+    langfuse_capture_payloads: bool = False
+    langfuse_flush_at_end: bool = False
+    langfuse_environment: str = "local"
+    langfuse_tags: tuple[str, ...] = ()
 
 
 def load_settings() -> Settings:
@@ -30,4 +35,20 @@ def load_settings() -> Settings:
         signing_secret=os.getenv("AGENTFORGE_SIGNING_SECRET", "dev-agentforge-signing-secret"),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         request_ttl_seconds=ttl,
+        langfuse_enabled=_env_bool("AGENTFORGE_LANGFUSE_ENABLED", False),
+        langfuse_capture_payloads=_env_bool("AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS", False),
+        langfuse_flush_at_end=_env_bool("AGENTFORGE_LANGFUSE_FLUSH_AT_END", False),
+        langfuse_environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT", os.getenv("AGENTFORGE_ENVIRONMENT", "local")),
+        langfuse_tags=_csv_tuple(os.getenv("AGENTFORGE_LANGFUSE_TAGS", "")),
     )
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _csv_tuple(raw: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
