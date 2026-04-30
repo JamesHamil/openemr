@@ -48,6 +48,12 @@ def main() -> int:
             passed = passed and any(warning.code == case["expected_warning_code"] for warning in response.warnings)
         if case.get("expected_blocked"):
             passed = passed and bool(response.blocked_claims)
+        if case.get("expected_min_sections") is not None:
+            passed = passed and len(response.sections) >= int(case["expected_min_sections"])
+        if case.get("expected_source_record_type"):
+            passed = passed and any(
+                source.record_type == case["expected_source_record_type"] for source in response.sources
+            )
 
         if not passed:
             failed += 1
@@ -59,6 +65,8 @@ def main() -> int:
                 "actual": response.verification_status,
                 "warnings": [warning.code for warning in response.warnings],
                 "blocked_claims": response.blocked_claims,
+                "sections": [section.id for section in response.sections],
+                "source_types": [source.record_type for source in response.sources],
                 "passed": passed,
             }
         )

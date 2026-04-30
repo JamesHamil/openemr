@@ -14,6 +14,7 @@ class AgentForgeEvidenceCollector
         $this->collectAllergies($pid, $sources, $statuses);
         $this->collectMedications($pid, $sources, $statuses);
         $this->collectVitals($pid, $sources, $statuses);
+        $this->collectLabs($pid, $sources, $statuses);
         $this->collectNotes($pid, $sources, $statuses);
 
         return [
@@ -60,7 +61,7 @@ class AgentForgeEvidenceCollector
     private function collectLists(string $pid, string $type, string $adapter, string $recordType, array &$sources, array &$statuses): void
     {
         $result = sqlStatement(
-            "SELECT id, title, begdate, date FROM lists WHERE pid = ? AND type = ? AND activity = 1 ORDER BY COALESCE(date, begdate) DESC LIMIT 8",
+            "SELECT id, title, begdate, date FROM lists WHERE pid = ? AND type = ? AND activity = 1 ORDER BY COALESCE(date, begdate) DESC LIMIT 6",
             [$pid, $type]
         );
         $count = 0;
@@ -85,7 +86,7 @@ class AgentForgeEvidenceCollector
     private function collectMedications(string $pid, array &$sources, array &$statuses): void
     {
         $result = sqlStatement(
-            "SELECT id, drug, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 ORDER BY COALESCE(date_added, start_date) DESC LIMIT 8",
+            "SELECT id, drug, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 ORDER BY COALESCE(date_added, start_date) DESC LIMIT 6",
             [$pid]
         );
         $count = 0;
@@ -133,10 +134,66 @@ class AgentForgeEvidenceCollector
         $statuses[] = $this->status('vitals', 'success');
     }
 
+    private function collectLabs(string $pid, array &$sources, array &$statuses): void
+    {
+        $result = sqlStatement(
+            "SELECT pr.procedure_result_id, pr.result_text, pr.result, pr.units, pr.range, pr.abnormal, pr.result_status, " .
+            "COALESCE(pr.date, prep.date_report, prep.date_collected, po.date_collected, po.date_ordered) AS lab_date, " .
+            "poc.procedure_name, poc.procedure_code " .
+            "FROM procedure_result pr " .
+            "JOIN procedure_report prep ON pr.procedure_report_id = prep.procedure_report_id " .
+            "JOIN procedure_order po ON prep.procedure_order_id = po.procedure_order_id " .
+            "LEFT JOIN procedure_order_code poc ON po.procedure_order_id = poc.procedure_order_id " .
+            "AND prep.procedure_order_seq = poc.procedure_order_seq " .
+            "WHERE po.patient_id = ? " .
+            "ORDER BY COALESCE(pr.date, prep.date_report, prep.date_collected, po.date_collected, po.date_ordered) DESC " .
+            "LIMIT 8",
+            [$pid]
+        );
+
+        $count = 0;
+        while ($row = sqlFetchArray($result)) {
+            $resultText = trim((string)($row['result_text'] ?? ''));
+            $procedureName = trim((string)($row['procedure_name'] ?? ''));
+            $label = $resultText !== '' ? $resultText : ($procedureName !== '' ? $procedureName : 'Lab result');
+            $valueParts = [$label];
+
+            if (!empty($row['result'])) {
+                $valueParts[] = 'result ' . trim((string)$row['result']);
+            }
+            if (!empty($row['units'])) {
+                $valueParts[] = 'units ' . trim((string)$row['units']);
+            }
+            if (!empty($row['range'])) {
+                $valueParts[] = 'range ' . trim((string)$row['range']);
+            }
+            if (!empty($row['abnormal'])) {
+                $valueParts[] = 'abnormal ' . trim((string)$row['abnormal']);
+            }
+            if (!empty($row['result_status'])) {
+                $valueParts[] = 'status ' . trim((string)$row['result_status']);
+            }
+
+            $count++;
+            $this->addSource(
+                $sources,
+                'lab-' . (string)$row['procedure_result_id'],
+                'lab',
+                'procedure_result.result',
+                implode('; ', $valueParts),
+                (string)($row['lab_date'] ?: gmdate('c'))
+            );
+        }
+
+        $statuses[] = $count === 0
+            ? $this->status('labs', 'unavailable', 'No recent lab results found in retrieved procedure result records.')
+            : $this->status('labs', 'success');
+    }
+
     private function collectNotes(string $pid, array &$sources, array &$statuses): void
     {
         $result = sqlStatement(
-            "SELECT id, date, body FROM pnotes WHERE pid = ? ORDER BY date DESC LIMIT 5",
+            "SELECT id, date, body FROM pnotes WHERE pid = ? ORDER BY date DESC LIMIT 2",
             [$pid]
         );
         $count = 0;

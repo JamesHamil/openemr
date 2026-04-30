@@ -61,10 +61,25 @@ try {
 
     $collector = new AgentForgeEvidenceCollector();
     $bundle = $collector->collect($requestPid, $encounterId);
+    $cacheKey = agentforge_cache_key($requestPid, $encounterId, $message, $bundle);
+    $cachedResponse = agentforge_cache_get($session, $cacheKey);
+    if (is_array($cachedResponse)) {
+        EventAuditLogger::getInstance()->newEvent(
+            'agentforge-chart-brief',
+            (string)agentforge_session_get($session, 'authUser', ''),
+            (string)agentforge_session_get($session, 'authProvider', ''),
+            1,
+            'cache_hit=1 trace_id=' . ($cachedResponse['trace_id'] ?? 'missing') . ' status=' . ($cachedResponse['verification_status'] ?? 'unknown'),
+            $requestPid
+        );
+        agentforge_json_response($cachedResponse);
+    }
+
     $request = agentforge_build_request($session, $conversationId, $message, $bundle);
 
     $client = new AgentForgeSidecarClient();
     $response = $client->send($request);
+    agentforge_cache_set($session, $cacheKey, $response);
 
     EventAuditLogger::getInstance()->newEvent(
         'agentforge-chart-brief',
@@ -127,6 +142,53 @@ function agentforge_error_response(string $message, string $code, string $status
         'verification_status' => $status,
         'trace_id' => 'openemr-' . bin2hex(random_bytes(4)),
     ];
+}
+
+function agentforge_cache_key(string $pid, string $encounterId, string $message, array $bundle): string
+{
+    $fingerprintPayload = [
+        'sources' => $bundle['sources'] ?? [],
+        'adapter_status' => $bundle['adapter_status'] ?? [],
+    ];
+    $fingerprint = hash('sha256', json_encode($fingerprintPayload, JSON_UNESCAPED_SLASHES));
+    $normalizedMessage = preg_replace('/\s+/', ' ', strtolower(trim($message)));
+    return hash('sha256', $pid . '|' . $encounterId . '|' . $normalizedMessage . '|' . $fingerprint);
+}
+
+function agentforge_cache_get($session, string $key): ?array
+{
+    $cache = agentforge_session_get($session, 'agentforge_response_cache', []);
+    if (!is_array($cache) || empty($cache[$key]) || !is_array($cache[$key])) {
+        return null;
+    }
+    if ((int)($cache[$key]['expires_at'] ?? 0) < time()) {
+        unset($cache[$key]);
+        agentforge_session_set($session, 'agentforge_response_cache', $cache);
+        return null;
+    }
+    $response = $cache[$key]['response'] ?? null;
+    return is_array($response) ? $response : null;
+}
+
+function agentforge_cache_set($session, string $key, array $response): void
+{
+    if (!in_array($response['verification_status'] ?? '', ['verified', 'partial', 'refused'], true)) {
+        return;
+    }
+    $ttl = max(30, min((int)(getenv('AGENTFORGE_CACHE_TTL_SECONDS') ?: 300), 900));
+    $cache = agentforge_session_get($session, 'agentforge_response_cache', []);
+    if (!is_array($cache)) {
+        $cache = [];
+    }
+    $cache[$key] = [
+        'expires_at' => time() + $ttl,
+        'response' => $response,
+    ];
+    if (count($cache) > 10) {
+        uasort($cache, fn($a, $b) => (int)($a['expires_at'] ?? 0) <=> (int)($b['expires_at'] ?? 0));
+        $cache = array_slice($cache, -10, null, true);
+    }
+    agentforge_session_set($session, 'agentforge_response_cache', $cache);
 }
 
 function agentforge_json_response(array $payload, int $status = 200): void

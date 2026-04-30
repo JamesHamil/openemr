@@ -56,11 +56,28 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
         }
         .agentforge-response {
             min-height: 180px;
-            white-space: pre-wrap;
             border: 1px solid var(--gray300, #dee2e6);
             border-radius: 4px;
             padding: 0.8rem;
             background: var(--gray100, #f8f9fa);
+        }
+        .agentforge-answer-summary {
+            margin-bottom: 0.75rem;
+            white-space: pre-wrap;
+        }
+        .agentforge-section {
+            margin: 0.75rem 0 0;
+        }
+        .agentforge-section h4 {
+            font-size: 1rem;
+            margin: 0 0 0.35rem;
+        }
+        .agentforge-section ul {
+            margin-bottom: 0;
+        }
+        .agentforge-citation {
+            color: var(--gray600, #6c757d);
+            font-size: 0.85em;
         }
         .agentforge-meta {
             display: grid;
@@ -159,9 +176,119 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             });
         }
 
+        function groupBy(items, key) {
+            return (items || []).reduce(function (groups, item) {
+                const group = item[key] || 'other';
+                groups[group] = groups[group] || [];
+                groups[group].push(item);
+                return groups;
+            }, {});
+        }
+
+        function titleize(value) {
+            return String(value || 'other').replace(/_/g, ' ').replace(/\b\w/g, function (letter) {
+                return letter.toUpperCase();
+            });
+        }
+
+        function renderAnswer(payload) {
+            answer.innerHTML = '';
+            const claimsById = {};
+            (payload.claims || []).forEach(function (claim) {
+                claimsById[claim.id] = claim;
+            });
+
+            if (payload.answer) {
+                const summary = document.createElement('div');
+                summary.className = 'agentforge-answer-summary';
+                summary.textContent = payload.answer;
+                answer.appendChild(summary);
+            }
+
+            const sections = payload.sections || [];
+            if (sections.length === 0) {
+                if (!payload.answer) {
+                    answer.textContent = 'No response body returned.';
+                }
+                return;
+            }
+
+            sections.forEach(function (section) {
+                const sectionNode = document.createElement('section');
+                sectionNode.className = 'agentforge-section';
+                const heading = document.createElement('h4');
+                heading.textContent = section.title || titleize(section.id);
+                sectionNode.appendChild(heading);
+
+                const list = document.createElement('ul');
+                (section.claim_ids || []).forEach(function (claimId) {
+                    const claim = claimsById[claimId];
+                    if (!claim) {
+                        return;
+                    }
+                    const item = document.createElement('li');
+                    item.appendChild(document.createTextNode(claim.text));
+                    if (claim.source_ids && claim.source_ids.length) {
+                        const cite = document.createElement('span');
+                        cite.className = 'agentforge-citation';
+                        cite.textContent = ' [' + claim.source_ids.join(', ') + ']';
+                        item.appendChild(cite);
+                    }
+                    list.appendChild(item);
+                });
+                if (list.children.length > 0) {
+                    sectionNode.appendChild(list);
+                    answer.appendChild(sectionNode);
+                }
+            });
+        }
+
+        function renderSources(items) {
+            sources.innerHTML = '';
+            if (!items || items.length === 0) {
+                const li = document.createElement('li');
+                li.textContent = 'None';
+                sources.appendChild(li);
+                return;
+            }
+
+            const groups = groupBy(items, 'record_type');
+            Object.keys(groups).sort().forEach(function (type) {
+                const groupItem = document.createElement('li');
+                groupItem.textContent = titleize(type);
+                const groupList = document.createElement('ul');
+                groups[type].forEach(function (source) {
+                    const sourceItem = document.createElement('li');
+                    sourceItem.textContent = source.id + ': ' + source.extracted_value;
+                    groupList.appendChild(sourceItem);
+                });
+                groupItem.appendChild(groupList);
+                sources.appendChild(groupItem);
+            });
+        }
+
+        function renderTrace(payload) {
+            trace.innerHTML = '';
+            const details = document.createElement('details');
+            const summary = document.createElement('summary');
+            summary.textContent = 'Debug trace';
+            const body = document.createElement('div');
+            body.textContent = payload.trace_id || '';
+            details.appendChild(summary);
+            details.appendChild(body);
+            trace.appendChild(details);
+        }
+
         function send(message) {
             top.restoreSession();
-            status.textContent = 'Working';
+            let elapsed = 0;
+            status.textContent = 'Generating... 0s';
+            briefButton.disabled = true;
+            askButton.disabled = true;
+            const timer = window.setInterval(function () {
+                elapsed += 1;
+                status.textContent = 'Generating... ' + elapsed + 's';
+            }, 1000);
             const data = new URLSearchParams();
             data.set('csrf_token_form', document.getElementById('agentforgeCsrf').value);
             data.set('patient_id', document.getElementById('agentforgePatientId').value);
@@ -177,25 +304,34 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
                 return response.json();
             }).then(function (payload) {
                 status.textContent = payload.verification_status || 'failed';
-                answer.textContent = payload.answer || 'No response body returned.';
-                renderList(sources, payload.sources || [], function (source) {
-                    return source.id + ' - ' + source.record_type + ': ' + source.extracted_value;
-                });
+                renderAnswer(payload);
+                renderSources(payload.sources || []);
                 renderList(warnings, payload.warnings || [], function (warning) {
                     return warning.code + ': ' + warning.message;
                 });
-                trace.textContent = payload.trace_id || '';
+                renderTrace(payload);
             }).catch(function () {
                 status.textContent = 'failed';
                 answer.textContent = 'Clinical Co-Pilot request failed before a verified response was returned.';
+            }).finally(function () {
+                window.clearInterval(timer);
+                briefButton.disabled = false;
+                askButton.disabled = false;
             });
         }
 
+        function messageInputValue() {
+            const value = document.getElementById('agentforgeMessage').value || '';
+            return value.trim();
+        }
+
         briefButton.addEventListener('click', function () {
-            send('Give me a chart brief for rounds.');
+            const message = messageInputValue() || 'Give me a chart brief for rounds.';
+            send(message);
         });
         askButton.addEventListener('click', function () {
-            send(document.getElementById('agentforgeMessage').value);
+            const message = messageInputValue() || 'Give me a chart brief for rounds.';
+            send(message);
         });
     })();
 </script>

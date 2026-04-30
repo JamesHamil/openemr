@@ -40,10 +40,11 @@ def adapter_warnings(request: AgentForgeRequest) -> list[WarningItem]:
     for status in request.evidence_bundle.adapter_status:
         if status.status != "success":
             reason = f": {status.reason}" if status.reason else ""
+            display = status.adapter.replace("_", " ")
             warnings.append(
                 WarningItem(
                     code=f"collector_{status.status}",
-                    message=f"{status.adapter} collector reported {status.status}{reason}.",
+                    message=f"{display.title()} data was {status.status} in retrieved OpenEMR records{reason}.",
                 )
             )
     return warnings
@@ -53,17 +54,17 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     response_source_ids = {source.id for source in response.sources}
     blocked: list[str] = list(response.blocked_claims)
-    verified_claims: list[Claim] = []
+    checked_claims: list[Claim] = []
 
     for claim in response.claims:
         if claim.support_status != "supported":
             blocked.append(claim.id)
-            verified_claims.append(claim.model_copy(update={"support_status": "blocked"}))
+            checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
         if not claim.source_ids:
             blocked.append(claim.id)
-            verified_claims.append(claim.model_copy(update={"support_status": "blocked"}))
+            checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
         missing_sources = [
@@ -73,15 +74,15 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
         ]
         if missing_sources:
             blocked.append(claim.id)
-            verified_claims.append(claim.model_copy(update={"support_status": "blocked"}))
+            checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
         if not _claim_has_source_overlap(claim, [source_by_id[source_id].value for source_id in claim.source_ids]):
             blocked.append(claim.id)
-            verified_claims.append(claim.model_copy(update={"support_status": "blocked"}))
+            checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
-        verified_claims.append(claim)
+        checked_claims.append(claim)
 
     warnings = response.warnings + adapter_warnings(request)
     for source in request.evidence_bundle.sources:
@@ -95,14 +96,42 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
             break
 
     status: ResponseStatus = response.verification_status
+    display_claims = checked_claims
+    display_sections = response.sections
+    display_sources = response.sources
+    answer = response.answer
     if blocked:
-        status = "partial" if verified_claims else "failed"
+        supported_claims = [claim for claim in checked_claims if claim.support_status == "supported"]
+        supported_claim_ids = {claim.id for claim in supported_claims}
+        supported_source_ids = {
+            source_id
+            for claim in supported_claims
+            for source_id in claim.source_ids
+        }
+        display_claims = supported_claims
+        display_sections = [
+            section.model_copy(
+                update={
+                    "claim_ids": [
+                        claim_id for claim_id in section.claim_ids if claim_id in supported_claim_ids
+                    ]
+                }
+            )
+            for section in response.sections
+            if any(claim_id in supported_claim_ids for claim_id in section.claim_ids)
+        ]
+        display_sources = [source for source in response.sources if source.id in supported_source_ids]
+        answer = _safe_answer_after_blocking(supported_claims)
+        status = "partial"
     if warnings and status == "verified":
         status = "partial"
 
     return response.model_copy(
         update={
-            "claims": verified_claims,
+            "answer": answer,
+            "sections": display_sections,
+            "claims": display_claims,
+            "sources": display_sources,
             "warnings": warnings,
             "blocked_claims": sorted(set(blocked)),
             "verification_status": status,
@@ -118,6 +147,17 @@ def _claim_has_source_overlap(claim: Claim, values: list[str]) -> bool:
     for value in values:
         source_words.update(_important_words(value))
     return bool(claim_words & source_words)
+
+
+def _safe_answer_after_blocking(claims: list[Claim]) -> str:
+    if not claims:
+        return "Clinical Co-Pilot could not verify the generated clinical claims against the retrieved chart evidence."
+
+    lines = ["Clinical Co-Pilot removed unsupported generated claims. Verified chart facts:"]
+    for claim in claims[:6]:
+        citation = f" [{', '.join(claim.source_ids)}]" if claim.source_ids else ""
+        lines.append(f"- {claim.text}{citation}")
+    return "\n".join(lines)
 
 
 def _important_words(text: str) -> set[str]:

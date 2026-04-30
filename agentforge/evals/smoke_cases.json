@@ -9,15 +9,27 @@
       ["vital-1", "vital", "form_vitals.bps", "Systolic blood pressure 138"]
     ],
     "adapter_status": [["problem_list", "success", ""], ["medications", "success", ""], ["allergies", "success", ""], ["vitals", "success", ""]],
-    "expected_status": "verified"
+    "expected_status": "verified",
+    "expected_min_sections": 3
   },
   {
     "id": "missing_labs",
     "message": "What labs are abnormal today?",
     "sources": [["problem-1", "problem", "lists.title", "Pneumonia"]],
-    "adapter_status": [["labs", "unavailable", "No lab adapter implemented yet"]],
+    "adapter_status": [["labs", "unavailable", "No recent lab results found in retrieved procedure result records."]],
     "expected_status": "partial",
     "expected_warning_code": "collector_unavailable"
+  },
+  {
+    "id": "lab_result_objective_data",
+    "message": "Give me a chart brief for rounds.",
+    "sources": [
+      ["problem-1", "problem", "lists.title", "Pneumonia"],
+      ["lab-1", "lab", "procedure_result.result", "Potassium; result 5.8; units mmol/L; range 3.5-5.1; abnormal high"]
+    ],
+    "adapter_status": [["problem_list", "success", ""], ["labs", "success", ""]],
+    "expected_status": "verified",
+    "expected_source_record_type": "lab"
   },
   {
     "id": "conflicting_notes",
