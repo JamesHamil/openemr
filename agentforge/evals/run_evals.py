@@ -30,15 +30,28 @@ def main() -> int:
 
     for case in cases:
         request = build_request(case)
-        if case.get("force_unsupported_claim"):
+        if case.get("force_unsupported_claim") or case.get("force_all_claims_blocked"):
             response = mock_response(request, f"eval-{case['id']}")
-            response.claims[0] = Claim(
-                id="claim-unsupported",
-                text="The retrieved source includes diabetes.",
-                claim_type="problem",
-                source_ids=[response.claims[0].source_ids[0]],
-                support_status="supported",
-            )
+            if case.get("force_all_claims_blocked"):
+                blocked = []
+                for index, claim in enumerate(response.claims, start=1):
+                    blocked.append(
+                        claim.model_copy(
+                            update={
+                                "id": f"claim-unsupported-{index}",
+                                "text": "The retrieved source includes diabetes.",
+                            }
+                        )
+                    )
+                response = response.model_copy(update={"claims": blocked})
+            else:
+                response.claims[0] = Claim(
+                    id="claim-unsupported",
+                    text="The retrieved source includes diabetes.",
+                    claim_type="problem",
+                    source_ids=[response.claims[0].source_ids[0]],
+                    support_status="supported",
+                )
             response = verify_response(request, response)
         else:
             response, _trace = handle_chat(request, Settings(mode="mock"))
@@ -54,6 +67,22 @@ def main() -> int:
             passed = passed and any(
                 source.record_type == case["expected_source_record_type"] for source in response.sources
             )
+        if case.get("expected_answer_contains"):
+            passed = passed and case["expected_answer_contains"].lower() in response.answer.lower()
+        if case.get("expected_answer_not_contains"):
+            passed = passed and case["expected_answer_not_contains"].lower() not in response.answer.lower()
+        if case.get("expected_answer_contains_all"):
+            passed = passed and all(
+                phrase.lower() in response.answer.lower() for phrase in case["expected_answer_contains_all"]
+            )
+        if case.get("expected_answer_not_contains_any"):
+            passed = passed and all(
+                phrase.lower() not in response.answer.lower() for phrase in case["expected_answer_not_contains_any"]
+            )
+        if case.get("expected_answer_starts_with"):
+            passed = passed and response.answer.lower().startswith(case["expected_answer_starts_with"].lower())
+        if case.get("expected_answer_max_words") is not None:
+            passed = passed and len(response.answer.split()) <= int(case["expected_answer_max_words"])
 
         if not passed:
             failed += 1

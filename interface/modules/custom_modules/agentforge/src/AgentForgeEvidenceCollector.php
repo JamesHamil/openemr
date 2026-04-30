@@ -50,44 +50,75 @@ class AgentForgeEvidenceCollector
 
     private function collectProblems(string $pid, array &$sources, array &$statuses): void
     {
-        $this->collectLists($pid, 'medical_problem', 'problem_list', 'problem', $sources, $statuses);
+        $count = $this->collectActiveIssueSources($pid, 'medical_problem', 'problem', 'problem', $sources, 6);
+        $statuses[] = $count === 0
+            ? $this->status('problem_list', 'unavailable', 'No active problem-list records found in retrieved lists.')
+            : $this->status('problem_list', 'success');
     }
 
     private function collectAllergies(string $pid, array &$sources, array &$statuses): void
     {
-        $this->collectLists($pid, 'allergy', 'allergies', 'allergy', $sources, $statuses);
+        $count = $this->collectActiveIssueSources($pid, 'allergy', 'allergy', 'allergy', $sources, 6);
+        $statuses[] = $count === 0
+            ? $this->status('allergies', 'unavailable', 'No active allergy records found in retrieved lists.')
+            : $this->status('allergies', 'success');
     }
 
-    private function collectLists(string $pid, string $type, string $adapter, string $recordType, array &$sources, array &$statuses): void
+    private function collectActiveIssueSources(
+        string $pid,
+        string $type,
+        string $recordType,
+        string $sourcePrefix,
+        array &$sources,
+        int $limit
+    ): int
     {
+        // Match the patient dashboard semantics for active issues:
+        // unresolved outcome and blank/future end date.
         $result = sqlStatement(
-            "SELECT id, title, begdate, date FROM lists WHERE pid = ? AND type = ? AND activity = 1 ORDER BY COALESCE(date, begdate) DESC LIMIT 6",
+            "SELECT id, title, begdate, date, enddate, outcome " .
+            "FROM lists WHERE pid = ? AND type = ? " .
+            "ORDER BY COALESCE(date, begdate) DESC LIMIT 48",
             [$pid, $type]
         );
         $count = 0;
         while ($row = sqlFetchArray($result)) {
-            if (!empty($row['title'])) {
-                $count++;
-                $this->addSource(
-                    $sources,
-                    $recordType . '-' . (string)$row['id'],
-                    $recordType,
-                    'lists.title',
-                    (string)$row['title'],
-                    (string)($row['date'] ?: $row['begdate'] ?: gmdate('c'))
-                );
+            if ($count >= $limit) {
+                break;
             }
+            if (!$this->isActiveIssueRow($row) || empty($row['title'])) {
+                continue;
+            }
+            $count++;
+            $this->addSource(
+                $sources,
+                $sourcePrefix . '-' . (string)$row['id'],
+                $recordType,
+                'lists.title',
+                (string)$row['title'],
+                (string)($row['date'] ?: $row['begdate'] ?: gmdate('c'))
+            );
         }
-        $statuses[] = $count === 0
-            ? $this->status($adapter, 'unavailable', 'No active records found in retrieved lists.')
-            : $this->status($adapter, 'success');
+        return $count;
     }
 
     private function collectMedications(string $pid, array &$sources, array &$statuses): void
     {
+        $count = $this->collectActiveIssueSources($pid, 'medication', 'medication', 'medication-list', $sources, 6);
+        if ($count === 0) {
+            $count = $this->collectActivePrescriptions($pid, $sources, 6);
+        }
+        $statuses[] = $count === 0
+            ? $this->status('medications', 'unavailable', 'No active medications found in retrieved medication lists or prescriptions.')
+            : $this->status('medications', 'success');
+    }
+
+    private function collectActivePrescriptions(string $pid, array &$sources, int $limit): int
+    {
         $result = sqlStatement(
-            "SELECT id, drug, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 ORDER BY COALESCE(date_added, start_date) DESC LIMIT 6",
-            [$pid]
+            "SELECT id, drug, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 " .
+            "ORDER BY COALESCE(date_added, start_date) DESC LIMIT ?",
+            [$pid, $limit]
         );
         $count = 0;
         while ($row = sqlFetchArray($result)) {
@@ -95,7 +126,7 @@ class AgentForgeEvidenceCollector
                 $count++;
                 $this->addSource(
                     $sources,
-                    'medication-' . (string)$row['id'],
+                    'medication-rx-' . (string)$row['id'],
                     'medication',
                     'prescriptions.drug',
                     (string)$row['drug'],
@@ -103,9 +134,7 @@ class AgentForgeEvidenceCollector
                 );
             }
         }
-        $statuses[] = $count === 0
-            ? $this->status('medications', 'unavailable', 'No active medications found in retrieved prescriptions.')
-            : $this->status('medications', 'success');
+        return $count;
     }
 
     private function collectVitals(string $pid, array &$sources, array &$statuses): void
@@ -246,5 +275,21 @@ class AgentForgeEvidenceCollector
             'status' => $status,
             'reason' => $reason,
         ];
+    }
+
+    private function isActiveIssueRow(array $row): bool
+    {
+        $outcome = isset($row['outcome']) ? (int)$row['outcome'] : 0;
+        if ($outcome === 1) {
+            return false;
+        }
+
+        $endDate = trim((string)($row['enddate'] ?? ''));
+        if ($endDate === '' || $endDate === '0000-00-00') {
+            return true;
+        }
+
+        $endTs = strtotime($endDate);
+        return $endTs !== false && $endTs > time();
     }
 }

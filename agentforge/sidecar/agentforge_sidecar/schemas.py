@@ -101,6 +101,30 @@ class AgentForgeResponse(StrictModel):
     trace_id: str
 
 
+class ToolCallRequest(StrictModel):
+    tool: Literal["search_sources", "get_sources", "list_adapter_status"]
+    arguments: dict = Field(default_factory=dict)
+
+
+class ToolCallResult(StrictModel):
+    tool: Literal["search_sources", "get_sources", "list_adapter_status"]
+    success: bool
+    payload: dict = Field(default_factory=dict)
+    error: str = ""
+
+
+class ClaimDraft(StrictModel):
+    text: str
+    claim_type: str
+    source_ids: list[str] = Field(default_factory=list)
+
+
+class ToolPhaseResult(StrictModel):
+    selected_source_ids: list[str] = Field(default_factory=list)
+    drafted_claims: list[ClaimDraft] = Field(default_factory=list)
+    focus: str = ""
+
+
 class TraceRecord(StrictModel):
     trace_id: str
     request_id: str
@@ -115,3 +139,8 @@ class TraceRecord(StrictModel):
     estimated_cost_usd: float
     latency_ms: int
     error: str = ""
+    tool_call_count: int | None = None
+    selected_source_count: int | None = None
+    fallback_reason: str | None = None
+    planning_latency_ms: int | None = None
+    compose_latency_ms: int | None = None

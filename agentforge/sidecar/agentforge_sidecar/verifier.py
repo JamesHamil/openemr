@@ -121,7 +121,7 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
             if any(claim_id in supported_claim_ids for claim_id in section.claim_ids)
         ]
         display_sources = [source for source in response.sources if source.id in supported_source_ids]
-        answer = _safe_answer_after_blocking(supported_claims)
+        answer = _safe_answer_after_blocking(supported_claims, request.message)
         status = "partial"
     if warnings and status == "verified":
         status = "partial"
@@ -149,15 +149,34 @@ def _claim_has_source_overlap(claim: Claim, values: list[str]) -> bool:
     return bool(claim_words & source_words)
 
 
-def _safe_answer_after_blocking(claims: list[Claim]) -> str:
+def _safe_answer_after_blocking(claims: list[Claim], message: str) -> str:
     if not claims:
-        return "Clinical Co-Pilot could not verify the generated clinical claims against the retrieved chart evidence."
+        return _focused_uncertainty_answer(message)
 
-    lines = ["Clinical Co-Pilot removed unsupported generated claims. Verified chart facts:"]
-    for claim in claims[:6]:
-        citation = f" [{', '.join(claim.source_ids)}]" if claim.source_ids else ""
-        lines.append(f"- {claim.text}{citation}")
-    return "\n".join(lines)
+    top_claims = claims[:3]
+    sentences = [_claim_sentence(claim) for claim in top_claims]
+    answer = "Based on retrieved chart evidence, " + " ".join(sentences)
+    if len(claims) > len(top_claims):
+        answer += " Additional supported details are listed below."
+    return answer
+
+
+def _focused_uncertainty_answer(message: str) -> str:
+    focus = _question_focus(message)
+    return f'I did not find retrieved evidence for "{focus}" in the bounded records; confirm in the chart.'
+
+
+def _claim_sentence(claim: Claim) -> str:
+    text = claim.text.strip()
+    if text and text[-1] not in ".!?":
+        text += "."
+    citation = f" [{', '.join(claim.source_ids)}]" if claim.source_ids else ""
+    return f"{text}{citation}"
+
+
+def _question_focus(message: str) -> str:
+    normalized = " ".join(message.strip().split()).rstrip("?.")
+    return normalized or "the requested topic"
 
 
 def _important_words(text: str) -> set[str]:

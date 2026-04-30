@@ -8,6 +8,9 @@
 !MVP_SUBMISSION.md
 !PRD.md
 !Dockerfile.sidecar
+!docker/
+!docker/railway/
+!docker/railway/sqlconf.php
 !agentforge/
 !agentforge/**
 !interface/

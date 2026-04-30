@@ -3,7 +3,6 @@ from __future__ import annotations
 import time
 import uuid
 
-from .direct_answers import direct_answer_for
 from .mock_provider import mock_response
 from .openai_provider import openai_response
 from .schemas import AgentForgeRequest, AgentForgeResponse, TraceRecord, WarningItem
@@ -15,7 +14,11 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     started = time.perf_counter()
     trace_id = f"af-{uuid.uuid4()}"
     error = ""
-    skip_verifier = False
+    tool_call_count = None
+    selected_source_count = None
+    fallback_reason = None
+    planning_latency_ms = None
+    compose_latency_ms = None
 
     try:
         if any(status.adapter == "authorization" and status.status == "failed" for status in request.evidence_bundle.adapter_status):
@@ -34,6 +37,7 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 verification_status="refused",
                 trace_id=trace_id,
             )
+            fallback_reason = "unauthorized_patient_refused"
         elif is_treatment_directive(request.message):
             response = AgentForgeResponse(
                 answer=(
@@ -53,9 +57,7 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 verification_status="refused",
                 trace_id=trace_id,
             )
-        elif direct_response := direct_answer_for(request, trace_id):
-            response = direct_response
-            skip_verifier = True
+            fallback_reason = "treatment_directive_refused"
         elif settings.mode == "off":
             response = AgentForgeResponse(
                 answer="Clinical Co-Pilot is currently disabled.",
@@ -72,23 +74,37 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 verification_status="failed",
                 trace_id=trace_id,
             )
+            fallback_reason = "agentforge_off"
         elif settings.mode == "real":
-            response = openai_response(request, trace_id, settings.model)
+            response, provider_diagnostics = openai_response(request, trace_id, settings.model)
+            tool_call_count = provider_diagnostics.tool_call_count
+            selected_source_count = provider_diagnostics.selected_source_count
+            fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
+            planning_latency_ms = provider_diagnostics.planning_latency_ms
+            compose_latency_ms = provider_diagnostics.compose_latency_ms
         else:
             response = mock_response(request, trace_id)
 
-        if not skip_verifier and response.verification_status not in {"refused", "failed"}:
+        if response.verification_status not in {"refused", "failed"}:
             response = verify_response(request, response)
+            if response.verification_status == "partial" and not response.claims and response.blocked_claims:
+                fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
     except Exception as exc:
         error = str(exc)
+        fallback_reason = fallback_reason or "sidecar_exception"
         response = AgentForgeResponse(
-            answer="Clinical Co-Pilot could not produce a verified response.",
+            answer=_focused_uncertainty_answer(request.message),
             sections=[],
             claims=[],
             sources=[],
-            warnings=[WarningItem(code="sidecar_exception", message="The sidecar returned a controlled failure.")],
+            warnings=[
+                WarningItem(
+                    code="sidecar_exception",
+                    message="The sidecar returned a controlled partial fallback.",
+                )
+            ],
             blocked_claims=[],
-            verification_status="failed",
+            verification_status="partial",
             trace_id=trace_id,
         )
 
@@ -107,9 +123,20 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
         estimated_cost_usd=0.0,
         latency_ms=latency_ms,
         error=error,
+        tool_call_count=tool_call_count,
+        selected_source_count=selected_source_count,
+        fallback_reason=fallback_reason,
+        planning_latency_ms=planning_latency_ms,
+        compose_latency_ms=compose_latency_ms,
     )
     return response, trace
 
 
 def _rough_tokens(text: str) -> int:
     return max(1, len(text) // 4)
+
+
+def _focused_uncertainty_answer(message: str) -> str:
+    normalized = " ".join(message.strip().split()).rstrip("?.")
+    focus = normalized or "the requested topic"
+    return f'I did not find retrieved evidence for "{focus}" in the bounded records; confirm in the chart.'

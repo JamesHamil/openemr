@@ -92,7 +92,8 @@ class VerifierTest(unittest.TestCase):
         verified = verify_response(request, response)
         self.assertEqual(verified.verification_status, "partial")
         self.assertIn("claim-bad", verified.blocked_claims)
-        self.assertNotIn("diabetes", verified.answer.lower())
+        self.assertIn("did not find retrieved evidence", verified.answer.lower())
+        self.assertIn("give me a chart brief", verified.answer.lower())
         self.assertEqual(verified.claims, [])
 
     def test_treatment_request_is_refused(self):
@@ -130,7 +131,7 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(response.verification_status, "verified")
         self.assertEqual(response.claims[0].claim_type, "lab")
 
-    def test_direct_allergy_question_bypasses_real_model(self):
+    def test_real_mode_uses_ai_path_for_allergy_question(self):
         request = request_with_sources(
             "Does this guy have allergies?",
             [
@@ -147,14 +148,20 @@ class VerifierTest(unittest.TestCase):
                 AdapterStatus(adapter="allergies", status="unavailable", reason="No active records found in retrieved lists."),
             ],
         )
-        with patch("agentforge_sidecar.service.openai_response") as openai_response:
-            response, _trace = handle_chat(request, Settings(mode="real"))
-        self.assertEqual(response.verification_status, "partial")
-        self.assertIn("allergy", response.answer.lower())
-        self.assertNotIn("hypertension", response.answer.lower())
-        openai_response.assert_not_called()
+        ai_response = mock_response(request, "trace-test")
+        class _Diag:
+            tool_call_count = 1
+            selected_source_count = 0
+            fallback_reason = "no_supporting_evidence_selected"
+            planning_latency_ms = 10
+            compose_latency_ms = 0
 
-    def test_direct_heart_question_filters_unrelated_chart_facts(self):
+        with patch("agentforge_sidecar.service.openai_response", return_value=(ai_response, _Diag())) as openai_response:
+            response, _trace = handle_chat(request, Settings(mode="real"))
+        openai_response.assert_called_once()
+        self.assertEqual(response.verification_status, "partial")
+
+    def test_real_mode_uses_ai_path_for_heart_question(self):
         request = request_with_sources(
             "Does this patient have any heart issues?",
             [
@@ -186,14 +193,72 @@ class VerifierTest(unittest.TestCase):
                 AdapterStatus(adapter="medications", status="success"),
             ],
         )
-        with patch("agentforge_sidecar.service.openai_response") as openai_response:
+        ai_response = mock_response(request, "trace-test")
+
+        class _Diag:
+            tool_call_count = 2
+            selected_source_count = 3
+            fallback_reason = ""
+            planning_latency_ms = 12
+            compose_latency_ms = 23
+
+        with patch("agentforge_sidecar.service.openai_response", return_value=(ai_response, _Diag())) as openai_response:
+            response, trace = handle_chat(request, Settings(mode="real"))
+        openai_response.assert_called_once()
+        self.assertEqual(trace.tool_call_count, 2)
+        self.assertEqual(trace.selected_source_count, 3)
+        self.assertEqual(trace.planning_latency_ms, 12)
+        self.assertEqual(trace.compose_latency_ms, 23)
+        self.assertIn("active chart issues", response.answer.lower())
+
+    def test_real_mode_uses_ai_path_for_eye_question(self):
+        request = request_with_source(value="Hypertension")
+        request = request.model_copy(update={"message": "Does this patient have any eye issues?"})
+        ai_response = mock_response(request, "trace-test")
+
+        class _Diag:
+            tool_call_count = 1
+            selected_source_count = 1
+            fallback_reason = ""
+            planning_latency_ms = 11
+            compose_latency_ms = 21
+
+        with patch("agentforge_sidecar.service.openai_response", return_value=(ai_response, _Diag())) as openai_response:
+            _response, _trace = handle_chat(request, Settings(mode="real"))
+        openai_response.assert_called_once()
+
+    def test_real_mode_provider_exception_degrades_to_partial(self):
+        request = request_with_source(value="Hypertension")
+        request = request.model_copy(update={"message": "Any active cardiac issues?"})
+        with patch("agentforge_sidecar.service.openai_response", side_effect=RuntimeError("provider boom")):
             response, _trace = handle_chat(request, Settings(mode="real"))
-        self.assertEqual(response.verification_status, "verified")
-        self.assertIn("hypertension", response.answer.lower())
-        self.assertNotIn("creatinine", response.answer.lower())
-        self.assertNotIn("hydrochlorothiazide", response.answer.lower())
-        self.assertEqual([source.record_type for source in response.sources], ["problem"])
-        openai_response.assert_not_called()
+        self.assertEqual(response.verification_status, "partial")
+        self.assertTrue(any(warning.code == "sidecar_exception" for warning in response.warnings))
+        self.assertIn("active cardiac issues", response.answer.lower())
+
+    def test_partial_after_blocking_uses_physician_natural_answer(self):
+        request = request_with_source("Pneumonia")
+        response = mock_response(request, "trace-test")
+        response.claims[0] = Claim(
+            id="claim-supported",
+            text="Problem list includes pneumonia",
+            claim_type="problem",
+            source_ids=["problem-1"],
+            support_status="supported",
+        )
+        response.claims.append(
+            Claim(
+                id="claim-unsupported",
+                text="Patient has diabetes",
+                claim_type="problem",
+                source_ids=["problem-1"],
+                support_status="supported",
+            )
+        )
+        verified = verify_response(request, response)
+        self.assertEqual(verified.verification_status, "partial")
+        self.assertIn("based on retrieved chart evidence", verified.answer.lower())
+        self.assertNotIn("removed unsupported generated claims", verified.answer.lower())
 
 
 if __name__ == "__main__":

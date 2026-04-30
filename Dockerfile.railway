@@ -6,6 +6,7 @@ LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge proj
 RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge
 RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
 
+COPY docker/railway/sqlconf.php /var/www/localhost/htdocs/openemr/sites/default/sqlconf.php
 COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md PRD.md /var/www/localhost/htdocs/openemr/agentforge/
 COPY agentforge/contracts /var/www/localhost/htdocs/openemr/agentforge/contracts
 COPY agentforge/evals /var/www/localhost/htdocs/openemr/agentforge/evals
