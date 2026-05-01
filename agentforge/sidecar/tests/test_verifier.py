@@ -7,9 +7,11 @@ from agentforge_sidecar.mock_provider import mock_response
 from agentforge_sidecar.schemas import (
     AdapterStatus,
     AgentForgeRequest,
+    AgentForgeResponse,
     Claim,
     EvidenceSource,
     PatientContext,
+    ResponseSource,
     RoundingContextBundle,
     Scope,
 )
@@ -157,6 +159,50 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(response.verification_status, "partial")
         self.assertTrue(response.warnings)
 
+    def test_unrelated_missing_collector_does_not_force_partial(self):
+        request = request_with_sources(
+            "Any active cardiac issues?",
+            [
+                EvidenceSource(
+                    id="problem-1",
+                    record_type="problem",
+                    recorded_at="2026-04-29T08:00:00Z",
+                    field_path="lists.title",
+                    value="Hyperlipidemia",
+                )
+            ],
+            [
+                AdapterStatus(adapter="problem_list", status="success"),
+                AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
+            ],
+        )
+        response = mock_response(request, "trace-test")
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.verification_status, "verified")
+        self.assertTrue(any(warning.code == "collector_unavailable" for warning in verified.warnings))
+
+    def test_negative_allergy_source_verifies_without_partial(self):
+        request = request_with_sources(
+            "What allergies do I need to know before ordering anything?",
+            [
+                EvidenceSource(
+                    id="allergy-none-123",
+                    record_type="allergy",
+                    recorded_at="2026-04-29T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    metadata={"status": "absent"},
+                )
+            ],
+            [AdapterStatus(adapter="allergies", status="success")],
+        )
+        response, _trace = handle_chat(request, Settings(mode="mock"))
+
+        self.assertEqual(response.verification_status, "verified")
+        self.assertIn("No active allergies", response.answer)
+        self.assertEqual(response.sources[0].id, "allergy-none-123")
+
     def test_lab_claim_can_be_verified(self):
         request = request_with_source(
             value="Potassium; result 5.8; units mmol/L; abnormal high",
@@ -296,6 +342,205 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(verified.verification_status, "partial")
         self.assertIn("based on retrieved chart evidence", verified.answer.lower())
         self.assertNotIn("removed unsupported generated claims", verified.answer.lower())
+
+    def test_missing_data_adapter_gap_claim_does_not_get_rewritten(self):
+        request = request_with_sources(
+            "What is missing that I need before making clinical decisions?",
+            [
+                EvidenceSource(
+                    id="allergy-none-9",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    metadata={"status": "absent"},
+                ),
+                EvidenceSource(
+                    id="problem-91",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Diabetes",
+                ),
+            ],
+            [
+                AdapterStatus(adapter="problem_list", status="success"),
+                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="medications", status="unavailable", reason="No active meds found."),
+                AdapterStatus(adapter="vitals", status="unavailable", reason="No vitals found."),
+                AdapterStatus(adapter="labs", status="unavailable", reason="No labs found."),
+                AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
+            ],
+        )
+        response = AgentForgeResponse(
+            answer=(
+                "Before making clinical decisions, I would want current medications, recent vitals, "
+                "recent labs, and recent notes. The retrieved payload confirms only a problem list "
+                "and allergy status."
+            ),
+            sections=[],
+            claims=[
+                Claim(
+                    id="claim-gap",
+                    text="Current medications, recent vitals, recent labs, and recent notes are unavailable in the retrieved payload.",
+                    claim_type="missing_data",
+                    source_ids=[],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-allergy",
+                    text="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    claim_type="allergy",
+                    source_ids=["allergy-none-9"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-problem",
+                    text="Problem list includes Diabetes.",
+                    claim_type="problem",
+                    source_ids=["problem-91"],
+                    support_status="supported",
+                ),
+            ],
+            sources=[
+                ResponseSource(
+                    id="allergy-none-9",
+                    record_type="allergy",
+                    display="Absent Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                ),
+                ResponseSource(
+                    id="problem-91",
+                    record_type="problem",
+                    display="Problem source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Diabetes",
+                ),
+            ],
+            warnings=[],
+            blocked_claims=[],
+            verification_status="partial",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.verification_status, "partial")
+        self.assertEqual(verified.answer, response.answer)
+        self.assertEqual(verified.blocked_claims, [])
+        self.assertIn("claim-gap", [claim.id for claim in verified.claims])
+
+    def test_first_room_guidance_answer_is_not_rewritten_to_source_inventory(self):
+        request = request_with_sources(
+            "What should I ask the patient first when I enter the room?",
+            [
+                EvidenceSource(
+                    id="problem-50",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Hypertension",
+                ),
+                EvidenceSource(
+                    id="medication-list-43",
+                    record_type="medication",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Amlodipine/Hydrochlorothiazide/Olmesartan",
+                ),
+                EvidenceSource(
+                    id="allergy-none-5",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    metadata={"status": "absent"},
+                ),
+            ],
+            [
+                AdapterStatus(adapter="problem_list", status="success"),
+                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="medications", status="success"),
+                AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
+            ],
+        )
+        response = AgentForgeResponse(
+            answer=(
+                "First, ask: What brought you in today, and what symptoms are you having right now? "
+                "Then confirm medication use and allergy history, because the chart shows hypertension, "
+                "current antihypertensives, and no active allergies in the retrieved allergy list."
+            ),
+            sections=[],
+            claims=[
+                Claim(
+                    id="claim-sequence",
+                    text="Ask first about today's symptoms, then confirm medication use and allergy history.",
+                    claim_type="guidance",
+                    source_ids=[],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-problem",
+                    text="The chart shows hypertension.",
+                    claim_type="problem",
+                    source_ids=["problem-50"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-med",
+                    text="Current listed medications include Amlodipine/Hydrochlorothiazide/Olmesartan.",
+                    claim_type="medication",
+                    source_ids=["medication-list-43"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-allergy",
+                    text="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    claim_type="allergy",
+                    source_ids=["allergy-none-5"],
+                    support_status="supported",
+                ),
+            ],
+            sources=[
+                ResponseSource(
+                    id="problem-50",
+                    record_type="problem",
+                    display="Problem source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Hypertension",
+                ),
+                ResponseSource(
+                    id="medication-list-43",
+                    record_type="medication",
+                    display="Medication source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Amlodipine/Hydrochlorothiazide/Olmesartan",
+                ),
+                ResponseSource(
+                    id="allergy-none-5",
+                    record_type="allergy",
+                    display="Absent Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                ),
+            ],
+            warnings=[],
+            blocked_claims=[],
+            verification_status="partial",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.answer, response.answer)
+        self.assertEqual(verified.blocked_claims, [])
+        self.assertIn("claim-sequence", [claim.id for claim in verified.claims])
 
     def test_langfuse_metadata_mode_does_not_capture_phi_payloads(self):
         request = request_with_source("Pneumonia")

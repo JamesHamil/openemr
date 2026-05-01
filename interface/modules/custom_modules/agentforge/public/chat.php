@@ -60,7 +60,7 @@ try {
     }
 
     $collector = new AgentForgeEvidenceCollector();
-    $bundle = $collector->collect($requestPid, $encounterId);
+    $bundle = $collector->collect($requestPid, $encounterId, $message);
     $cacheKey = agentforge_cache_key($requestPid, $encounterId, $message, $bundle);
     $cachedResponse = agentforge_cache_get($session, $cacheKey);
     if (is_array($cachedResponse)) {

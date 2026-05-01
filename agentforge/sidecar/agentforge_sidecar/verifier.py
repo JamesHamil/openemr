@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .clinical_planner import EvidencePlan, missing_required_adapters, plan_evidence
 from .schemas import AgentForgeRequest, AgentForgeResponse, Claim, ResponseStatus, WarningItem
 
 
@@ -50,11 +51,17 @@ def adapter_warnings(request: AgentForgeRequest) -> list[WarningItem]:
     return warnings
 
 
-def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) -> AgentForgeResponse:
+def verify_response(
+    request: AgentForgeRequest,
+    response: AgentForgeResponse,
+    evidence_plan: EvidencePlan | None = None,
+) -> AgentForgeResponse:
+    evidence_plan = evidence_plan or plan_evidence(request)
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     response_source_ids = {source.id for source in response.sources}
     blocked: list[str] = list(response.blocked_claims)
     checked_claims: list[Claim] = []
+    prompt_injection_found = False
 
     for claim in response.claims:
         if claim.support_status != "supported":
@@ -63,6 +70,12 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
             continue
 
         if not claim.source_ids:
+            if _adapter_gap_claim_is_supported(claim, request, evidence_plan):
+                checked_claims.append(claim)
+                continue
+            if _first_room_guidance_claim_is_supported(claim, evidence_plan):
+                checked_claims.append(claim)
+                continue
             blocked.append(claim.id)
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
@@ -87,6 +100,7 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
     warnings = response.warnings + adapter_warnings(request)
     for source in request.evidence_bundle.sources:
         if has_prompt_injection_text(source.value) or (source.note_span and has_prompt_injection_text(source.note_span)):
+            prompt_injection_found = True
             warnings.append(
                 WarningItem(
                     code="prompt_injection_in_chart_text",
@@ -102,6 +116,7 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
     answer = response.answer
     if blocked:
         supported_claims = [claim for claim in checked_claims if claim.support_status == "supported"]
+        blocked_claims = [claim for claim in checked_claims if claim.support_status == "blocked"]
         supported_claim_ids = {claim.id for claim in supported_claims}
         supported_source_ids = {
             source_id
@@ -121,9 +136,14 @@ def verify_response(request: AgentForgeRequest, response: AgentForgeResponse) ->
             if any(claim_id in supported_claim_ids for claim_id in section.claim_ids)
         ]
         display_sources = [source for source in response.sources if source.id in supported_source_ids]
-        answer = _safe_answer_after_blocking(supported_claims, request.message)
+        if _can_preserve_answer_after_blocking(evidence_plan, supported_claims, blocked_claims):
+            answer = response.answer
+        else:
+            answer = _safe_answer_after_blocking(supported_claims, request.message)
         status = "partial"
-    if warnings and status == "verified":
+    if missing_required_adapters(request, evidence_plan) and status == "verified":
+        status = "partial"
+    if prompt_injection_found and status == "verified":
         status = "partial"
 
     return response.model_copy(
@@ -147,6 +167,65 @@ def _claim_has_source_overlap(claim: Claim, values: list[str]) -> bool:
     for value in values:
         source_words.update(_important_words(value))
     return bool(claim_words & source_words)
+
+
+def _adapter_gap_claim_is_supported(claim: Claim, request: AgentForgeRequest, evidence_plan: EvidencePlan) -> bool:
+    if evidence_plan.answer_family != "missing_data":
+        return False
+    if claim.claim_type not in {"missing_data", "gap", "guidance", "adapter_status"}:
+        return False
+
+    normalized = claim.text.lower()
+    if not any(term in normalized for term in ("missing", "unavailable", "not provided", "not visible", "need", "review", "confirm")):
+        return False
+
+    status_by_adapter = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
+    missing_adapters = {
+        adapter
+        for adapter in evidence_plan.needed_adapters
+        if status_by_adapter.get(adapter) not in {"success", "partial"}
+    }
+    if not missing_adapters:
+        return False
+
+    adapter_terms = {
+        "medications": ("medication", "medications", "med", "meds"),
+        "vitals": ("vital", "vitals"),
+        "labs": ("lab", "labs", "laboratory"),
+        "recent_notes": ("note", "notes", "assessment", "encounter"),
+        "problem_list": ("problem", "condition", "conditions", "diagnosis", "diagnoses"),
+        "allergies": ("allergy", "allergies"),
+    }
+    return any(
+        any(term in normalized for term in adapter_terms.get(adapter, (adapter.replace("_", " "),)))
+        for adapter in missing_adapters
+    )
+
+
+def _first_room_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan) -> bool:
+    if evidence_plan.answer_family != "first_room":
+        return False
+    if claim.claim_type not in {"guidance", "question_sequence", "first_room", "question"}:
+        return False
+
+    normalized = claim.text.lower()
+    if any(term in normalized for term in ("prescribe", "order ", "dose", "administer", "discontinue")):
+        return False
+    return any(term in normalized for term in ("ask", "confirm", "clarify", "review", "question", "symptom", "history"))
+
+
+def _can_preserve_answer_after_blocking(
+    evidence_plan: EvidencePlan,
+    supported_claims: list[Claim],
+    blocked_claims: list[Claim],
+) -> bool:
+    if not supported_claims:
+        return False
+    if evidence_plan.answer_family not in {"first_room", "missing_data"}:
+        return False
+
+    soft_claim_types = {"guidance", "question_sequence", "first_room", "question", "missing_data", "gap", "adapter_status"}
+    return all(claim.claim_type in soft_claim_types for claim in blocked_claims)
 
 
 def _safe_answer_after_blocking(claims: list[Claim], message: str) -> str:

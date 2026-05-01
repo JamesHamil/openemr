@@ -44,6 +44,8 @@ Use `AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=true` only in an approved environment 
 ## Tests
 
 ```shell
-PYTHONPATH=agentforge/sidecar python3 -m unittest agentforge.sidecar.tests.test_verifier
-python3 agentforge/evals/run_evals.py
+PYTHONPATH=agentforge/sidecar python3 -m unittest discover -s agentforge/sidecar/tests
+PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_evals.py
 ```
+
+Set `AGENTFORGE_EVAL_MODE=live` to run the smoke evals through real mode with OpenAI credentials. The default remains deterministic mock mode for local and CI runs.

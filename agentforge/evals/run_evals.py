@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -23,8 +25,19 @@ from agentforge_sidecar.settings import Settings  # noqa: E402
 from agentforge_sidecar.verifier import verify_response  # noqa: E402
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run AgentForge smoke evals.")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the eval results as JSON instead of the default human-readable report.",
+    )
+    args = parser.parse_args(argv)
+
     cases = json.loads((Path(__file__).with_name("smoke_cases.json")).read_text())
+    eval_mode = os.getenv("AGENTFORGE_EVAL_MODE", "mock").strip().lower()
+    if eval_mode not in {"mock", "live"}:
+        eval_mode = "mock"
     results = []
     failed = 0
 
@@ -54,7 +67,7 @@ def main() -> int:
                 )
             response = verify_response(request, response)
         else:
-            response, _trace = handle_chat(request, Settings(mode="mock"))
+            response, _trace = handle_chat(request, Settings(mode="real" if eval_mode == "live" else "mock"))
 
         passed = response.verification_status == case["expected_status"]
         if case.get("expected_warning_code"):
@@ -90,18 +103,51 @@ def main() -> int:
         results.append(
             {
                 "id": case["id"],
+                "input": case["message"],
                 "expected": case["expected_status"],
                 "actual": response.verification_status,
+                "output": response.answer,
                 "warnings": [warning.code for warning in response.warnings],
                 "blocked_claims": response.blocked_claims,
                 "sections": [section.id for section in response.sections],
                 "source_types": [source.record_type for source in response.sources],
+                "eval_mode": eval_mode,
                 "passed": passed,
             }
         )
 
-    print(json.dumps({"passed": len(results) - failed, "failed": failed, "results": results}, indent=2))
+    payload = {"passed": len(results) - failed, "failed": failed, "results": results}
+    if args.json:
+        print(json.dumps(payload, indent=2))
+    else:
+        print(format_report(payload, eval_mode))
     return 1 if failed else 0
+
+
+def format_report(payload: dict, eval_mode: str) -> str:
+    lines = [
+        f"AgentForge evals ({eval_mode} mode)",
+        f"Summary: {payload['passed']} passed, {payload['failed']} failed",
+        "",
+    ]
+    for result in payload["results"]:
+        status = "PASS" if result["passed"] else "FAIL"
+        warnings = ", ".join(result["warnings"]) if result["warnings"] else "none"
+        blocked_count = len(result["blocked_claims"])
+        source_types = ", ".join(result["source_types"]) if result["source_types"] else "none"
+        lines.extend(
+            [
+                f"[{status}] {result['id']}",
+                f"  Input: {result['input']}",
+                f"  Expected: {result['expected']} | Actual: {result['actual']}",
+                f"  Warnings: {warnings}",
+                f"  Sources: {source_types}",
+                f"  Blocked claims: {blocked_count}",
+                f"  Output: {result['output']}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
 
 
 def build_request(case: dict) -> AgentForgeRequest:

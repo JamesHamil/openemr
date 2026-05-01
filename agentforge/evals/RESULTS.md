@@ -1,11 +1,19 @@
 # AgentForge Eval Results
 
-Current eval target: sidecar mock mode and verifier contract.
+Current default eval target: deterministic sidecar mode and verifier contract. Set `AGENTFORGE_EVAL_MODE=live` to run the same fixtures through real mode with OpenAI credentials.
 
 Run with:
 
 ```shell
-/Users/james/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 agentforge/evals/run_evals.py
+PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_evals.py
+```
+
+The default output is a readable scorecard with each case's input, output, expected status, actual status, warnings, source types, blocked-claim count, and pass/fail result.
+
+For machine-readable output:
+
+```shell
+PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_evals.py --json
 ```
 
 Smoke cases:
@@ -18,11 +26,12 @@ Smoke cases:
 - collector failure
 - unsafe treatment request
 - prompt injection in chart text
+- physician prompt families for allergies, cardiac, endocrine/metabolic, oncology, red flags, med rec, allergy-risk meds, first-room questions, and missing-data questions
 
 Latest local run:
 
 ```text
-passed: 8
+passed: 22
 failed: 0
 ```
 

@@ -20,6 +20,12 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     fallback_reason = None
     planning_latency_ms = None
     compose_latency_ms = None
+    answer_family = None
+    needed_adapters: list[str] = []
+    citation_coverage = None
+    verifier_result = None
+    repair_count = None
+    status_reason = None
 
     with chat_observation(request, settings, trace_id) as chat_span:
         try:
@@ -87,6 +93,12 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
                 planning_latency_ms = provider_diagnostics.planning_latency_ms
                 compose_latency_ms = provider_diagnostics.compose_latency_ms
+                answer_family = getattr(provider_diagnostics, "answer_family", None)
+                needed_adapters = list(getattr(provider_diagnostics, "needed_adapters", ()) or ())
+                citation_coverage = getattr(provider_diagnostics, "citation_coverage", None)
+                verifier_result = getattr(provider_diagnostics, "verifier_result", None)
+                repair_count = getattr(provider_diagnostics, "repair_count", None)
+                status_reason = getattr(provider_diagnostics, "status_reason", None)
             else:
                 response = mock_response(request, trace_id)
 
@@ -133,6 +145,12 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             fallback_reason=fallback_reason,
             planning_latency_ms=planning_latency_ms,
             compose_latency_ms=compose_latency_ms,
+            answer_family=answer_family,
+            needed_adapters=needed_adapters,
+            citation_coverage=citation_coverage,
+            verifier_result=verifier_result,
+            repair_count=repair_count,
+            status_reason=status_reason,
         )
         update_chat_observation(chat_span, response, trace, settings)
     return response, trace

@@ -57,6 +57,7 @@ def mock_response(request: AgentForgeRequest, trace_id: str) -> AgentForgeRespon
             recorded_at=source.recorded_at,
             field_path=source.field_path,
             extracted_value=source.value,
+            metadata=source.metadata,
         )
         for source in request.evidence_bundle.sources[:10]
     ]
@@ -115,6 +116,8 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
     by_type = _group_sources(sources)
     problems = by_type.get("problem", [])
     allergies = by_type.get("allergy", [])
+    positive_allergies = [source for source in allergies if source.metadata.get("status") != "absent"]
+    negative_allergies = [source for source in allergies if source.metadata.get("status") == "absent"]
     meds = by_type.get("medication", [])
     labs = by_type.get("lab", [])
     missing = [status.adapter for status in adapter_status if status.status != "success"]
@@ -131,8 +134,10 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
         sentences = []
         if problems:
             sentences.append(f"Problem list includes {_join_values(problems)}.")
-        if allergies:
-            sentences.append(f"Allergies include {_join_values(allergies)}.")
+        if positive_allergies:
+            sentences.append(f"Allergies include {_join_values(positive_allergies)}.")
+        elif negative_allergies:
+            sentences.append("No active allergies were reported in the retrieved allergy list.")
         else:
             sentences.append("No active allergy records were found in this retrieved snapshot.")
         if meds:
@@ -144,8 +149,10 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
         return " ".join(sentences[:5])
 
     if "allerg" in normalized:
-        if allergies:
-            response = f"Documented allergies: {_join_values(allergies)}."
+        if positive_allergies:
+            response = f"Documented allergies: {_join_values(positive_allergies)}."
+        elif negative_allergies:
+            response = "No active allergies were reported in the retrieved allergy list."
         else:
             response = "No active allergy records were found in the retrieved snapshot."
         if any("epinephrine" in source.extracted_value.lower() for source in meds):

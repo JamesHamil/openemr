@@ -350,6 +350,7 @@ def _source_payload(source: EvidenceSource) -> dict:
         "field_path": source.field_path,
         "value": source.value[:280],
         "note_span": (source.note_span or "")[:180],
+        "metadata": source.metadata,
     }
 
 

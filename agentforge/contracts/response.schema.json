@@ -53,7 +53,11 @@
           "display": { "type": "string" },
           "recorded_at": { "type": "string" },
           "field_path": { "type": "string" },
-          "extracted_value": { "type": "string" }
+          "extracted_value": { "type": "string" },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
         }
       }
     },

@@ -4,7 +4,7 @@ namespace OpenEMR\Modules\AgentForge;
 
 class AgentForgeEvidenceCollector
 {
-    public function collect(string $pid, string $encounterId = ''): array
+    public function collect(string $pid, string $encounterId = '', string $message = ''): array
     {
         $sources = [];
         $statuses = [];
@@ -12,7 +12,7 @@ class AgentForgeEvidenceCollector
         $this->collectPatientSnapshot($pid, $sources, $statuses);
         $this->collectProblems($pid, $sources, $statuses);
         $this->collectAllergies($pid, $sources, $statuses);
-        $this->collectMedications($pid, $sources, $statuses);
+        $this->collectMedications($pid, $message, $sources, $statuses);
         $this->collectVitals($pid, $sources, $statuses);
         $this->collectLabs($pid, $sources, $statuses);
         $this->collectNotes($pid, $sources, $statuses);
@@ -59,9 +59,24 @@ class AgentForgeEvidenceCollector
     private function collectAllergies(string $pid, array &$sources, array &$statuses): void
     {
         $count = $this->collectActiveIssueSources($pid, 'allergy', 'allergy', 'allergy', $sources, 6);
-        $statuses[] = $count === 0
-            ? $this->status('allergies', 'unavailable', 'No active allergy records found in retrieved lists.')
-            : $this->status('allergies', 'success');
+        if ($count === 0) {
+            $this->addSource(
+                $sources,
+                'allergy-none-' . $pid,
+                'allergy',
+                'lists.type=allergy',
+                'No active allergies reported in retrieved OpenEMR allergy lists.',
+                gmdate('c'),
+                '',
+                [
+                    'status' => 'absent',
+                    'source_table' => 'lists',
+                    'issue_type' => 'allergy',
+                    'active' => '0',
+                ]
+            );
+        }
+        $statuses[] = $this->status('allergies', 'success');
     }
 
     private function collectActiveIssueSources(
@@ -96,13 +111,19 @@ class AgentForgeEvidenceCollector
                 $recordType,
                 'lists.title',
                 (string)$row['title'],
-                (string)($row['date'] ?: $row['begdate'] ?: gmdate('c'))
+                (string)($row['date'] ?: $row['begdate'] ?: gmdate('c')),
+                '',
+                [
+                    'status' => 'current',
+                    'source_table' => 'lists',
+                    'issue_type' => $type,
+                ]
             );
         }
         return $count;
     }
 
-    private function collectMedications(string $pid, array &$sources, array &$statuses): void
+    private function collectMedications(string $pid, string $message, array &$sources, array &$statuses): void
     {
         $count = $this->collectActiveIssueSources($pid, 'medication', 'medication', 'medication-list', $sources, 6);
         if ($count === 0) {
@@ -111,6 +132,13 @@ class AgentForgeEvidenceCollector
         $statuses[] = $count === 0
             ? $this->status('medications', 'unavailable', 'No active medications found in retrieved medication lists or prescriptions.')
             : $this->status('medications', 'success');
+
+        if ($this->isMedicationReconciliationPrompt($message)) {
+            $historyCount = $this->collectHistoricalPrescriptions($pid, $sources, 6);
+            $statuses[] = $historyCount === 0
+                ? $this->status('medication_history', 'unavailable', 'No historical prescriptions found for medication reconciliation.')
+                : $this->status('medication_history', 'success');
+        }
     }
 
     private function collectActivePrescriptions(string $pid, array &$sources, int $limit): int
@@ -130,7 +158,43 @@ class AgentForgeEvidenceCollector
                     'medication',
                     'prescriptions.drug',
                     (string)$row['drug'],
-                    (string)($row['date_added'] ?: $row['start_date'] ?: gmdate('c'))
+                    (string)($row['date_added'] ?: $row['start_date'] ?: gmdate('c')),
+                    '',
+                    [
+                        'status' => 'current',
+                        'source_table' => 'prescriptions',
+                        'active' => '1',
+                    ]
+                );
+            }
+        }
+        return $count;
+    }
+
+    private function collectHistoricalPrescriptions(string $pid, array &$sources, int $limit): int
+    {
+        $result = sqlStatement(
+            "SELECT id, drug, date_added, start_date, active FROM prescriptions WHERE patient_id = ? AND active = 0 " .
+            "ORDER BY COALESCE(date_added, start_date) DESC LIMIT ?",
+            [$pid, $limit]
+        );
+        $count = 0;
+        while ($row = sqlFetchArray($result)) {
+            if (!empty($row['drug'])) {
+                $count++;
+                $this->addSource(
+                    $sources,
+                    'medication-history-rx-' . (string)$row['id'],
+                    'medication',
+                    'prescriptions.drug',
+                    (string)$row['drug'],
+                    (string)($row['date_added'] ?: $row['start_date'] ?: gmdate('c')),
+                    '',
+                    [
+                        'status' => 'historical',
+                        'source_table' => 'prescriptions',
+                        'active' => '0',
+                    ]
                 );
             }
         }
@@ -253,7 +317,8 @@ class AgentForgeEvidenceCollector
         string $fieldPath,
         string $value,
         string $recordedAt = '',
-        string $noteSpan = ''
+        string $noteSpan = '',
+        array $metadata = []
     ): void {
         $source = [
             'id' => $id,
@@ -264,6 +329,9 @@ class AgentForgeEvidenceCollector
         ];
         if ($noteSpan !== '') {
             $source['note_span'] = $noteSpan;
+        }
+        if (!empty($metadata)) {
+            $source['metadata'] = array_map('strval', $metadata);
         }
         $sources[] = $source;
     }
@@ -291,5 +359,13 @@ class AgentForgeEvidenceCollector
 
         $endTs = strtotime($endDate);
         return $endTs !== false && $endTs > time();
+    }
+
+    private function isMedicationReconciliationPrompt(string $message): bool
+    {
+        $normalized = strtolower($message);
+        return strpos($normalized, 'medication reconciliation') !== false
+            || strpos($normalized, 'med rec') !== false
+            || strpos($normalized, 'reconciliation') !== false;
     }
 }

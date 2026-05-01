@@ -44,7 +44,7 @@ def chat_observation(
             user_id=_bounded(request.scope.user_hash),
             session_id=_bounded(request.conversation_id),
             metadata=metadata,
-            tags=("agentforge", settings.mode, *settings.langfuse_tags),
+            tags=",".join(("agentforge", settings.mode, *settings.langfuse_tags)),
             trace_name="agentforge.chat",
         )
         attributes_cm.__enter__()
@@ -139,6 +139,12 @@ def update_chat_observation(
             "fallback_reason": trace.fallback_reason or "",
             "planning_latency_ms": trace.planning_latency_ms,
             "compose_latency_ms": trace.compose_latency_ms,
+            "answer_family": trace.answer_family or "",
+            "needed_adapters": ",".join(trace.needed_adapters),
+            "citation_coverage": trace.citation_coverage,
+            "verifier_result": trace.verifier_result or "",
+            "repair_count": trace.repair_count,
+            "status_reason": trace.status_reason or "",
             "error": trace.error,
         },
     )
@@ -227,6 +233,7 @@ def _request_input(request: AgentForgeRequest, capture_payloads: bool) -> dict[s
             "field_path": source.field_path,
             "value": source.value[:280],
             "note_span": (source.note_span or "")[:180],
+            "metadata": source.metadata,
         }
         for source in request.evidence_bundle.sources
     ]

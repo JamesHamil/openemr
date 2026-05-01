@@ -50,7 +50,11 @@
               "recorded_at": { "type": "string" },
               "field_path": { "type": "string" },
               "value": { "type": "string" },
-              "note_span": { "type": "string" }
+              "note_span": { "type": "string" },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+              }
             }
           }
         },

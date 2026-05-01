@@ -3,9 +3,22 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
+from typing import Literal
 
+from pydantic import Field
+
+from .clinical_planner import EvidencePlan, plan_evidence
 from .observability import generation_observation, update_generation_observation
-from .schemas import AgentForgeRequest, AgentForgeResponse, WarningItem
+from .schemas import (
+    AgentForgeRequest,
+    AgentForgeResponse,
+    Claim,
+    EvidenceSource,
+    ResponseSection,
+    ResponseSource,
+    StrictModel,
+    WarningItem,
+)
 from .settings import Settings
 from .tool_agent import ToolPhaseDiagnostics, run_tool_phase
 
@@ -14,22 +27,65 @@ COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist prepa
 Use only the selected evidence provided in this request payload. Never provide treatment directives,
 orders, diagnoses, or medication changes. Every factual clinical claim must cite source_ids from selected evidence.
 
-Choose the output shape that best fits the user request:
-- Chart brief: one-liner, active chart issues, meds/allergies, recent objective data,
-  missing data, and questions/issues for physician review.
-- Follow-up question: direct answer first, then supporting evidence and missing-data notes.
-- Treatment/action request: refuse the directive and offer to summarize record-backed issues.
+You will receive an evidence_plan with an answer_family and clinical rubric. Use it to decide what evidence matters,
+not as a canned template. Write naturally for a physician. Do not copy the rubric wording unless it fits the answer.
 
 Keep the answer concise and physician-natural: <=180 words, <=8 claims, <=10 displayed sources.
 Start answer with a direct natural-language response to the specific question.
 Avoid unrelated chart inventory unless directly needed for the question.
-If evidence is limited, include one short clinician guidance sentence about what to confirm in chart.
+If evidence is limited or an important adapter is unavailable, include one short clinician guidance sentence about what to confirm in chart.
 Use compact inline citations only when useful (for example [problem-12]).
 For narrow follow-up questions, sections may be empty and claims may be minimal.
 For broad chart-summary requests, include sections with scannable claims.
 Use answer for the top-line response and claims/sections for supporting details.
 Return only sources that are cited by claims. Keep each extracted_value short.
 Say evidence was not found in retrieved records rather than absent from reality."""
+
+VERIFIER_PROMPT = """You are the AgentForge citation verifier.
+Check whether the draft answer is supported by selected chart evidence and follows the evidence_plan.
+Do not add clinical facts. Return structured verification only.
+
+Mark result as:
+- passed: all factual claims are source-backed and the answer covers the question well enough.
+- repairable: there are missing citations, overclaims, or missing expected elements that can be fixed using selected evidence.
+- failed: the selected evidence cannot support a useful answer to this question.
+
+Use question-scoped status semantics: missing unrelated adapters are warnings, not automatic partial.
+Recommend partial only when relevant evidence is unavailable, citations remain unsupported, or the answer is incomplete for the question."""
+
+REPAIR_PROMPT = """Revise the AgentForgeResponse using only the selected evidence and verifier feedback.
+Keep the prose natural, concise, and source-cited. Remove unsupported claims instead of weakening citations.
+Preserve useful supported content whenever possible."""
+
+
+class ModelVerificationResult(StrictModel):
+    result: Literal["passed", "repairable", "failed"]
+    issues: list[str] = Field(default_factory=list)
+    unsupported_claim_ids: list[str] = Field(default_factory=list)
+    missing_expected_elements: list[str] = Field(default_factory=list)
+    status_recommendation: Literal["verified", "partial", "refused", "failed"] = "verified"
+    citation_coverage: float = 0.0
+
+
+class ModelResponseSource(StrictModel):
+    id: str
+    record_type: str
+    display: str
+    recorded_at: str
+    field_path: str
+    extracted_value: str
+
+
+class ModelAgentForgeResponse(StrictModel):
+    schema_version: Literal["agentforge.response.v1"] = "agentforge.response.v1"
+    answer: str
+    sections: list[ResponseSection] = Field(default_factory=list)
+    claims: list[Claim] = Field(default_factory=list)
+    sources: list[ModelResponseSource] = Field(default_factory=list)
+    warnings: list[WarningItem] = Field(default_factory=list)
+    blocked_claims: list[str] = Field(default_factory=list)
+    verification_status: Literal["verified", "partial", "refused", "failed"]
+    trace_id: str
 
 
 @dataclass(frozen=True)
@@ -39,10 +95,17 @@ class ProviderDiagnostics:
     fallback_reason: str = ""
     planning_latency_ms: int = 0
     compose_latency_ms: int = 0
+    answer_family: str = ""
+    needed_adapters: tuple[str, ...] = ()
+    citation_coverage: float | None = None
+    verifier_result: str = ""
+    repair_count: int = 0
+    status_reason: str = ""
 
 
 def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
     model = settings.model
+    evidence_plan = plan_evidence(request)
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover - depends on runtime dependency
@@ -52,6 +115,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             warning_code="openai_runtime_unavailable",
             warning_message=f"OpenAI real mode is not available in this runtime: {exc}",
             fallback_reason="openai_runtime_unavailable",
+            evidence_plan=evidence_plan,
         )
     try:
         client = OpenAI()
@@ -63,26 +127,31 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 "message": request.message,
                 "source_count": len(request.evidence_bundle.sources),
                 "adapter_statuses": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+                "answer_family": evidence_plan.answer_family,
+                "planner_selected_source_ids": list(evidence_plan.selected_source_ids),
             },
         ) as tool_observation:
             tool_plan, tool_diag = run_tool_phase(client, request, model)
+            selected_source_ids = _merge_source_ids(evidence_plan.selected_source_ids, tool_plan.selected_source_ids)
             update_generation_observation(
                 tool_observation,
                 settings,
                 {
-                    "selected_source_ids": tool_plan.selected_source_ids,
-                    "selected_source_count": tool_diag.selected_source_count,
+                    "selected_source_ids": selected_source_ids,
+                    "selected_source_count": len(selected_source_ids),
                     "drafted_claim_count": len(tool_plan.drafted_claims),
                     "focus": tool_plan.focus,
+                    "answer_family": evidence_plan.answer_family,
                 },
                 metadata={
                     "tool_call_count": tool_diag.tool_call_count,
                     "planning_latency_ms": tool_diag.planning_latency_ms,
                     "fallback_reason": tool_diag.fallback_reason,
                     "invalid_source_id_count": tool_diag.invalid_source_id_count,
+                    "needed_adapters": ",".join(evidence_plan.needed_adapters),
                 },
             )
-        selected_sources = _selected_sources(request, tool_plan.selected_source_ids)
+        selected_sources = _selected_sources(request, selected_source_ids)
         if not selected_sources:
             warnings = []
             reason = tool_diag.fallback_reason or "no_supporting_evidence_selected"
@@ -108,6 +177,9 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 fallback_reason=reason,
                 planning_latency_ms=tool_diag.planning_latency_ms,
                 compose_latency_ms=0,
+                answer_family=evidence_plan.answer_family,
+                needed_adapters=evidence_plan.needed_adapters,
+                status_reason=reason,
             )
             return response, diagnostics
 
@@ -120,6 +192,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             "selected_sources": [source.model_dump() for source in selected_sources],
             "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
             "drafted_claims": [claim.model_dump() for claim in tool_plan.drafted_claims],
+            "evidence_plan": _plan_payload(evidence_plan),
         }
 
         with generation_observation(
@@ -147,24 +220,35 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                         ),
                     },
                 ],
-                text_format=AgentForgeResponse,
+                text_format=ModelAgentForgeResponse,
             )
             parsed = compose_response.output_parsed
             if not parsed:
                 raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
+            parsed_response = _model_response_to_agent_response(parsed, trace_id)
             compose_latency_ms = int((time.perf_counter() - compose_started) * 1000)
             update_generation_observation(
                 compose_observation,
                 settings,
                 {
-                    "verification_status": parsed.verification_status,
-                    "claim_count": len(parsed.claims),
-                    "source_count": len(parsed.sources),
-                    "answer": parsed.answer,
+                    "verification_status": parsed_response.verification_status,
+                    "claim_count": len(parsed_response.claims),
+                    "source_count": len(parsed_response.sources),
+                    "answer": parsed_response.answer,
                 },
                 metadata={"compose_latency_ms": compose_latency_ms},
             )
-        normalized = _limit_response(parsed.model_copy(update={"trace_id": trace_id}), selected_sources)
+        normalized = _limit_response(parsed_response, selected_sources)
+        normalized, verification_metadata = _model_verify_and_repair(
+            client=client,
+            model=model,
+            settings=settings,
+            request=request,
+            response=normalized,
+            selected_sources=selected_sources,
+            evidence_plan=evidence_plan,
+            trace_id=trace_id,
+        )
         if tool_diag.invalid_source_id_count > 0:
             normalized = normalized.model_copy(
                 update={
@@ -183,6 +267,12 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             fallback_reason=tool_diag.fallback_reason,
             planning_latency_ms=tool_diag.planning_latency_ms,
             compose_latency_ms=compose_latency_ms,
+            answer_family=evidence_plan.answer_family,
+            needed_adapters=evidence_plan.needed_adapters,
+            citation_coverage=verification_metadata.citation_coverage,
+            verifier_result=verification_metadata.result,
+            repair_count=verification_metadata.repair_count,
+            status_reason=verification_metadata.status_reason,
         )
         return normalized, diagnostics
     except Exception:  # pragma: no cover - runtime/model-path safeguard
@@ -192,31 +282,41 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             warning_code="provider_exception",
             warning_message="Model processing returned a controlled partial fallback.",
             fallback_reason="provider_exception",
+            evidence_plan=evidence_plan,
         )
 
 
-def _limit_response(response: AgentForgeResponse, selected_sources) -> AgentForgeResponse:
+@dataclass(frozen=True)
+class VerificationMetadata:
+    result: str = ""
+    citation_coverage: float | None = None
+    repair_count: int = 0
+    status_reason: str = ""
+
+
+def _limit_response(response: AgentForgeResponse, selected_sources: list[EvidenceSource]) -> AgentForgeResponse:
     selected_ids = {source.id for source in selected_sources}
+    selected_by_id = {source.id: source for source in selected_sources}
     kept_claims = []
     kept_source_ids: list[str] = []
     kept_claim_ids = set()
 
     for claim in response.claims:
-        candidate_source_ids = [
-            source_id for source_id in claim.source_ids if source_id in selected_ids and source_id not in kept_source_ids
-        ]
+        candidate_source_ids = [source_id for source_id in claim.source_ids if source_id in selected_ids]
         if not candidate_source_ids:
             continue
-        if len(kept_claims) >= 8 or len(kept_source_ids) + len(candidate_source_ids) > 10:
+        new_source_ids = [source_id for source_id in candidate_source_ids if source_id not in kept_source_ids]
+        if len(kept_claims) >= 8 or len(kept_source_ids) + len(new_source_ids) > 10:
             continue
         kept_claims.append(claim.model_copy(update={"source_ids": candidate_source_ids}))
         kept_claim_ids.add(claim.id)
-        kept_source_ids.extend(candidate_source_ids)
+        kept_source_ids.extend(new_source_ids)
 
-    response_sources = []
-    for source in response.sources:
-        if source.id in kept_source_ids and len(response_sources) < 10:
-            response_sources.append(source)
+    response_sources = [
+        _response_source_from_evidence(selected_by_id[source_id])
+        for source_id in kept_source_ids
+        if source_id in selected_by_id
+    ][:10]
 
     sections = []
     for section in response.sections:
@@ -233,7 +333,166 @@ def _limit_response(response: AgentForgeResponse, selected_sources) -> AgentForg
     )
 
 
-def _selected_sources(request: AgentForgeRequest, source_ids: list[str]):
+def _model_verify_and_repair(
+    client,
+    model: str,
+    settings: Settings,
+    request: AgentForgeRequest,
+    response: AgentForgeResponse,
+    selected_sources: list[EvidenceSource],
+    evidence_plan: EvidencePlan,
+    trace_id: str,
+) -> tuple[AgentForgeResponse, VerificationMetadata]:
+    verification_payload = {
+        "message": request.message,
+        "evidence_plan": _plan_payload(evidence_plan),
+        "selected_sources": [source.model_dump() for source in selected_sources],
+        "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+        "draft_response": response.model_dump(),
+    }
+    try:
+        with generation_observation(
+            "agentforge.verify_response",
+            settings,
+            model,
+            verification_payload,
+        ) as verify_observation:
+            verify_response = client.responses.parse(
+                model=model,
+                max_output_tokens=900,
+                input=[
+                    {"role": "system", "content": VERIFIER_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Verify this draft AgentForgeResponse:\n"
+                            + json.dumps(verification_payload, separators=(",", ":"))
+                        ),
+                    },
+                ],
+                text_format=ModelVerificationResult,
+            )
+            parsed = verify_response.output_parsed
+            if not parsed:
+                raise RuntimeError("Model verifier did not return parsed output")
+            update_generation_observation(
+                verify_observation,
+                settings,
+                parsed.model_dump(),
+                metadata={
+                    "verifier_result": parsed.result,
+                    "citation_coverage": parsed.citation_coverage,
+                    "status_recommendation": parsed.status_recommendation,
+                },
+            )
+
+        metadata = VerificationMetadata(
+            result=parsed.result,
+            citation_coverage=parsed.citation_coverage,
+            repair_count=0,
+            status_reason="model_verifier_passed" if parsed.result == "passed" else "; ".join(parsed.issues[:3]),
+        )
+        if parsed.result == "passed":
+            if parsed.status_recommendation != response.verification_status:
+                response = response.model_copy(update={"verification_status": parsed.status_recommendation})
+            return response, metadata
+
+        repaired = _repair_response(
+            client=client,
+            model=model,
+            settings=settings,
+            request=request,
+            response=response,
+            selected_sources=selected_sources,
+            evidence_plan=evidence_plan,
+            verification=parsed,
+            trace_id=trace_id,
+        )
+        if repaired is None:
+            status = "partial" if response.verification_status == "verified" else response.verification_status
+            return response.model_copy(update={"verification_status": status}), VerificationMetadata(
+                result=parsed.result,
+                citation_coverage=parsed.citation_coverage,
+                repair_count=0,
+                status_reason="model_verifier_unrepaired",
+            )
+        return repaired, VerificationMetadata(
+            result=parsed.result,
+            citation_coverage=parsed.citation_coverage,
+            repair_count=1,
+            status_reason="model_verifier_repaired",
+        )
+    except Exception:
+        return response, VerificationMetadata(
+            result="verifier_unavailable",
+            citation_coverage=_code_citation_coverage(response),
+            repair_count=0,
+            status_reason="model_verifier_unavailable",
+        )
+
+
+def _repair_response(
+    client,
+    model: str,
+    settings: Settings,
+    request: AgentForgeRequest,
+    response: AgentForgeResponse,
+    selected_sources: list[EvidenceSource],
+    evidence_plan: EvidencePlan,
+    verification: ModelVerificationResult,
+    trace_id: str,
+) -> AgentForgeResponse | None:
+    repair_payload = {
+        "message": request.message,
+        "evidence_plan": _plan_payload(evidence_plan),
+        "selected_sources": [source.model_dump() for source in selected_sources],
+        "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+        "draft_response": response.model_dump(),
+        "verifier_feedback": verification.model_dump(),
+    }
+    try:
+        with generation_observation(
+            "agentforge.repair_response",
+            settings,
+            model,
+            repair_payload,
+        ) as repair_observation:
+            repair_response = client.responses.parse(
+                model=model,
+                max_output_tokens=1800,
+                input=[
+                    {"role": "system", "content": REPAIR_PROMPT},
+                    {
+                        "role": "user",
+                        "content": (
+                            "Return a revised AgentForgeResponse:\n"
+                            + json.dumps(repair_payload, separators=(",", ":"))
+                        ),
+                    },
+                ],
+                text_format=ModelAgentForgeResponse,
+            )
+            parsed = repair_response.output_parsed
+            if not parsed:
+                return None
+            repaired = _limit_response(_model_response_to_agent_response(parsed, trace_id), selected_sources)
+            update_generation_observation(
+                repair_observation,
+                settings,
+                {
+                    "verification_status": repaired.verification_status,
+                    "claim_count": len(repaired.claims),
+                    "source_count": len(repaired.sources),
+                    "answer": repaired.answer,
+                },
+                metadata={"repair_count": 1},
+            )
+            return repaired
+    except Exception:
+        return None
+
+
+def _selected_sources(request: AgentForgeRequest, source_ids: list[str] | tuple[str, ...]):
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     selected = []
     for source_id in source_ids:
@@ -248,6 +507,74 @@ def _selected_sources(request: AgentForgeRequest, source_ids: list[str]):
     return selected
 
 
+def _model_response_to_agent_response(response: ModelAgentForgeResponse, trace_id: str) -> AgentForgeResponse:
+    return AgentForgeResponse(
+        schema_version=response.schema_version,
+        answer=response.answer,
+        sections=response.sections,
+        claims=response.claims,
+        sources=[
+            ResponseSource(
+                id=source.id,
+                record_type=source.record_type,
+                display=source.display,
+                recorded_at=source.recorded_at,
+                field_path=source.field_path,
+                extracted_value=source.extracted_value,
+            )
+            for source in response.sources
+        ],
+        warnings=response.warnings,
+        blocked_claims=response.blocked_claims,
+        verification_status=response.verification_status,
+        trace_id=trace_id,
+    )
+
+
+def _merge_source_ids(*source_id_groups: list[str] | tuple[str, ...]) -> list[str]:
+    merged: list[str] = []
+    for source_ids in source_id_groups:
+        for source_id in source_ids:
+            if source_id not in merged:
+                merged.append(source_id)
+            if len(merged) >= 10:
+                return merged
+    return merged
+
+
+def _plan_payload(plan: EvidencePlan) -> dict:
+    return {
+        "answer_family": plan.answer_family,
+        "required_adapters": list(plan.required_adapters),
+        "context_adapters": list(plan.context_adapters),
+        "needed_adapters": list(plan.needed_adapters),
+        "preferred_record_types": list(plan.preferred_record_types),
+        "planner_selected_source_ids": list(plan.selected_source_ids),
+        "rubric": list(plan.rubric),
+    }
+
+
+def _response_source_from_evidence(source: EvidenceSource) -> ResponseSource:
+    status = source.metadata.get("status", "")
+    display_prefix = f"{status.title()} " if status else ""
+    return ResponseSource(
+        id=source.id,
+        record_type=source.record_type,
+        display=f"{display_prefix}{source.record_type.replace('_', ' ').title()} source",
+        recorded_at=source.recorded_at,
+        field_path=source.field_path,
+        extracted_value=source.value,
+        metadata=source.metadata,
+    )
+
+
+def _code_citation_coverage(response: AgentForgeResponse) -> float:
+    if not response.claims:
+        return 0.0
+    cited = sum(1 for claim in response.claims if claim.source_ids)
+    return round(cited / len(response.claims), 3)
+
+
 def _focused_uncertainty_answer(message: str) -> str:
     normalized = " ".join(message.strip().split()).rstrip("?.")
     focus = normalized or "the requested topic"
@@ -260,6 +587,7 @@ def _provider_partial_fallback(
     warning_code: str,
     warning_message: str,
     fallback_reason: str,
+    evidence_plan: EvidencePlan | None = None,
 ) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
     response = AgentForgeResponse(
         answer=_focused_uncertainty_answer(request.message),
@@ -271,5 +599,10 @@ def _provider_partial_fallback(
         verification_status="partial",
         trace_id=trace_id,
     )
-    diagnostics = ProviderDiagnostics(fallback_reason=fallback_reason)
+    diagnostics = ProviderDiagnostics(
+        fallback_reason=fallback_reason,
+        answer_family=evidence_plan.answer_family if evidence_plan else "",
+        needed_adapters=evidence_plan.needed_adapters if evidence_plan else (),
+        status_reason=fallback_reason,
+    )
     return response, diagnostics

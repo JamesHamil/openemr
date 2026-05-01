@@ -12,7 +12,7 @@ OpenEMR is responsible for authentication, authorization, patient context, evide
 ## Response Statuses
 
 - `verified`: every factual clinical claim is source-bound and supported by the evidence bundle.
-- `partial`: all stated claims are verified against available evidence, but one or more collectors failed, timed out, or were unavailable.
+- `partial`: all displayed claims are source-bound, but relevant evidence for the requested question was unavailable, citation repair was incomplete, or the answer can only be partially supported by the bounded snapshot. Missing unrelated collectors may still appear as warnings without forcing `partial`.
 - `refused`: the request asks for a treatment directive, unauthorized data, cross-patient context, or an ungrounded conclusion.
 - `failed`: malformed input, sidecar failure, provider failure, or verifier failure prevents a controlled answer.
 

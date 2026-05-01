@@ -33,6 +33,7 @@ class EvidenceSource(StrictModel):
     field_path: str
     value: str
     note_span: str | None = None
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class AdapterStatus(StrictModel):
@@ -82,6 +83,7 @@ class ResponseSource(StrictModel):
     recorded_at: str
     field_path: str
     extracted_value: str
+    metadata: dict[str, str] = Field(default_factory=dict)
 
 
 class WarningItem(StrictModel):
@@ -144,3 +146,9 @@ class TraceRecord(StrictModel):
     fallback_reason: str | None = None
     planning_latency_ms: int | None = None
     compose_latency_ms: int | None = None
+    answer_family: str | None = None
+    needed_adapters: list[str] = Field(default_factory=list)
+    citation_coverage: float | None = None
+    verifier_result: str | None = None
+    repair_count: int | None = None
+    status_reason: str | None = None
