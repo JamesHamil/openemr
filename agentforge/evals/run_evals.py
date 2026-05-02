@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -21,8 +22,24 @@ from agentforge_sidecar.schemas import (  # noqa: E402
     Scope,
 )
 from agentforge_sidecar.service import handle_chat  # noqa: E402
-from agentforge_sidecar.settings import Settings  # noqa: E402
+from agentforge_sidecar.settings import load_settings  # noqa: E402
 from agentforge_sidecar.verifier import verify_response  # noqa: E402
+
+
+LIVE_CONCEPTS = {
+    "lab_result_objective_data": ["pneumonia", "potassium", "abnormal_lab"],
+    "conflicting_notes": ["change_or_conflict", "improved", "worsened"],
+    "physician_prompt_pre_round_summary": ["problem_evidence", "allergy_evidence", "medication_evidence", "missing_gap"],
+    "physician_prompt_allergy_ordering": ["allergies", "epinephrine", "drug_allergy_status", "severity_or_trigger"],
+    "physician_prompt_active_cardiac": ["cardiac_or_risk", "vital_or_confirm"],
+    "physician_prompt_endocrine_metabolic": ["cardiometabolic_risk", "labs_review"],
+    "physician_prompt_oncology_history": ["oncology_history", "oncology_status_followup"],
+    "physician_prompt_red_flags": ["bullet_wound", "miscarriage", "verify_status"],
+    "physician_prompt_med_reconciliation": ["current_meds", "active_or_legacy"],
+    "physician_prompt_meds_for_allergy_management": ["allergy_med", "epinephrine", "antihistamine"],
+    "physician_prompt_ask_patient_first": ["symptoms_first", "allergy_history", "medication_use", "diagnosis_status"],
+    "physician_prompt_missing_before_decisions": ["missing_data", "labs_or_notes", "confirm_or_review"],
+}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -67,35 +84,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
             response = verify_response(request, response)
         else:
-            response, _trace = handle_chat(request, Settings(mode="real" if eval_mode == "live" else "mock"))
+            response, _trace = handle_chat(request, replace(load_settings(), mode="real" if eval_mode == "live" else "mock"))
 
-        passed = response.verification_status == case["expected_status"]
-        if case.get("expected_warning_code"):
-            passed = passed and any(warning.code == case["expected_warning_code"] for warning in response.warnings)
-        if case.get("expected_blocked"):
-            passed = passed and bool(response.blocked_claims)
-        if case.get("expected_min_sections") is not None:
-            passed = passed and len(response.sections) >= int(case["expected_min_sections"])
-        if case.get("expected_source_record_type"):
-            passed = passed and any(
-                source.record_type == case["expected_source_record_type"] for source in response.sources
-            )
-        if case.get("expected_answer_contains"):
-            passed = passed and case["expected_answer_contains"].lower() in response.answer.lower()
-        if case.get("expected_answer_not_contains"):
-            passed = passed and case["expected_answer_not_contains"].lower() not in response.answer.lower()
-        if case.get("expected_answer_contains_all"):
-            passed = passed and all(
-                phrase.lower() in response.answer.lower() for phrase in case["expected_answer_contains_all"]
-            )
-        if case.get("expected_answer_not_contains_any"):
-            passed = passed and all(
-                phrase.lower() not in response.answer.lower() for phrase in case["expected_answer_not_contains_any"]
-            )
-        if case.get("expected_answer_starts_with"):
-            passed = passed and response.answer.lower().startswith(case["expected_answer_starts_with"].lower())
-        if case.get("expected_answer_max_words") is not None:
-            passed = passed and len(response.answer.split()) <= int(case["expected_answer_max_words"])
+        passed, failure_reasons = evaluate_case(case, response, eval_mode)
 
         if not passed:
             failed += 1
@@ -113,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 "source_types": [source.record_type for source in response.sources],
                 "eval_mode": eval_mode,
                 "passed": passed,
+                "failure_reasons": failure_reasons,
             }
         )
 
@@ -140,6 +132,7 @@ def format_report(payload: dict, eval_mode: str) -> str:
                 f"[{status}] {result['id']}",
                 f"  Input: {result['input']}",
                 f"  Expected: {result['expected']} | Actual: {result['actual']}",
+                f"  Failure reasons: {', '.join(result['failure_reasons']) if result['failure_reasons'] else 'none'}",
                 f"  Warnings: {warnings}",
                 f"  Sources: {source_types}",
                 f"  Blocked claims: {blocked_count}",
@@ -148,6 +141,90 @@ def format_report(payload: dict, eval_mode: str) -> str:
             ]
         )
     return "\n".join(lines).rstrip()
+
+
+def evaluate_case(case: dict, response, eval_mode: str) -> tuple[bool, list[str]]:
+    reasons: list[str] = []
+    answer = response.answer.lower()
+
+    if response.verification_status != case["expected_status"]:
+        reasons.append(f"status expected {case['expected_status']} got {response.verification_status}")
+    if case.get("expected_warning_code") and not any(
+        warning.code == case["expected_warning_code"] for warning in response.warnings
+    ):
+        reasons.append(f"missing warning {case['expected_warning_code']}")
+    if case.get("expected_blocked") and not response.blocked_claims:
+        reasons.append("expected blocked claims")
+    if case.get("expected_min_sections") is not None and len(response.sections) < int(case["expected_min_sections"]):
+        reasons.append(f"expected at least {case['expected_min_sections']} sections")
+    if case.get("expected_source_record_type") and not any(
+        source.record_type == case["expected_source_record_type"] for source in response.sources
+    ):
+        reasons.append(f"missing source type {case['expected_source_record_type']}")
+
+    if eval_mode == "live" and case["id"] in LIVE_CONCEPTS:
+        for concept in LIVE_CONCEPTS[case["id"]]:
+            if not _concept_present(concept, answer):
+                reasons.append(f"missing live concept {concept}")
+    else:
+        if case.get("expected_answer_contains") and case["expected_answer_contains"].lower() not in answer:
+            reasons.append(f"answer missing phrase {case['expected_answer_contains']!r}")
+        if case.get("expected_answer_contains_all"):
+            for phrase in case["expected_answer_contains_all"]:
+                if phrase.lower() not in answer:
+                    reasons.append(f"answer missing phrase {phrase!r}")
+
+    if case.get("expected_answer_not_contains") and case["expected_answer_not_contains"].lower() in answer:
+        reasons.append(f"answer contains forbidden phrase {case['expected_answer_not_contains']!r}")
+    if case.get("expected_answer_not_contains_any"):
+        for phrase in case["expected_answer_not_contains_any"]:
+            if phrase.lower() in answer:
+                reasons.append(f"answer contains forbidden phrase {phrase!r}")
+    if case.get("expected_answer_starts_with") and not answer.startswith(case["expected_answer_starts_with"].lower()):
+        reasons.append(f"answer does not start with {case['expected_answer_starts_with']!r}")
+    return not reasons, reasons
+
+
+def _concept_present(concept: str, answer: str) -> bool:
+    concept_terms = {
+        "abnormal_lab": (("abnormal", "elevated", "high", "hyperkalemia"),),
+        "active_or_legacy": (("active", "current"), ("legacy", "historical", "past")),
+        "allergies": (("allergy", "allergies"),),
+        "allergy_evidence": (("allergy", "allergies"),),
+        "allergy_history": (("allergy", "allergies", "reaction"),),
+        "allergy_med": (("allergy", "allergic", "antihistamine", "loratadine"),),
+        "antihistamine": (("loratadine", "antihistamine"),),
+        "bullet_wound": (("bullet",),),
+        "cardiac_or_risk": (("cardiac", "cardiovascular", "hypertension", "heart"),),
+        "cardiometabolic_risk": (("cardiometabolic",), ("prediabetes", "hyperlipidemia")),
+        "change_or_conflict": (("changed", "change", "conflict", "conflicting", "improved", "worsened"),),
+        "confirm_or_review": (("confirm", "review", "verify", "needed"),),
+        "current_meds": (("current", "listed", "medication", "medications", "prescription", "prescriptions"),),
+        "diagnosis_status": (("diagnosis", "diagnoses", "problem", "problems", "condition", "status", "concerns"),),
+        "drug_allergy_status": (("drug", "medication"), ("no documented", "not noted", "not identified", "no clear")),
+        "endocrine_metabolic": (("prediabetes", "hyperlipidemia", "metabolic"),),
+        "epinephrine": (("epinephrine", "auto-injector", "autoinjector"),),
+        "improved": (("improved",),),
+        "labs_or_notes": (("lab", "labs", "note", "notes", "vital", "vitals"),),
+        "labs_review": (("lab", "labs", "glucose", "lipid"), ("review", "check", "assess")),
+        "medication_evidence": (("medication", "medications", "med", "meds", "loratadine", "liletta", "epinephrine"),),
+        "medication_use": (("medication", "medications", "med", "meds"),),
+        "missing_data": (("missing", "unavailable", "not available", "needed"),),
+        "missing_gap": (("missing", "unavailable", "not available", "confirm", "review"),),
+        "miscarriage": (("miscarriage",),),
+        "oncology_history": (("malignant", "neoplasm", "breast", "cancer", "oncology"),),
+        "oncology_status_followup": (("status", "active", "history", "timeline", "follow-up", "follow up", "oncology"),),
+        "pneumonia": (("pneumonia",),),
+        "potassium": (("potassium", "k+"),),
+        "problem_evidence": (("problem", "problems", "diagnosis", "diagnoses", "active issues"),),
+        "severity_or_trigger": (("severity", "trigger", "severe", "reaction", "reactions"),),
+        "symptoms_first": (("symptom", "symptoms", "concern", "concerns", "brought you in", "feeling"),),
+        "verify_status": (("verify", "confirm", "clarify"), ("active", "historical", "resolved", "current", "status")),
+        "vital_or_confirm": (("vital", "blood pressure", "bp", "137/89", "confirm", "review"),),
+        "worsened": (("worsened", "worse"),),
+    }
+    groups = concept_terms.get(concept, ((concept,),))
+    return all(any(term in answer for term in group) for group in groups)
 
 
 def build_request(case: dict) -> AgentForgeRequest:

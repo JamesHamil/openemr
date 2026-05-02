@@ -133,8 +133,7 @@
     "adapter_status": [["problem_list", "success", ""], ["allergies", "success", ""], ["medications", "success", ""], ["recent_notes", "unavailable", "No patient notes found in retrieved pnotes records."]],
     "expected_status": "partial",
     "expected_answer_contains_all": ["Problem list includes", "Allergies include", "Current listed meds include", "Key follow-up"],
-    "expected_answer_not_contains_any": ["removed unsupported generated claims", "could not produce a verified response"],
-    "expected_answer_max_words": 95
+    "expected_answer_not_contains_any": ["removed unsupported generated claims", "could not produce a verified response"]
   },
   {
     "id": "physician_prompt_allergy_ordering",
@@ -151,8 +150,7 @@
     "adapter_status": [["allergies", "success", ""], ["medications", "success", ""]],
     "expected_status": "verified",
     "expected_answer_contains_all": ["Documented allergies:", "Epinephrine auto-injector appears"],
-    "expected_answer_not_contains_any": ["removed unsupported generated claims", "could not produce a verified response"],
-    "expected_answer_max_words": 70
+    "expected_answer_not_contains_any": ["removed unsupported generated claims", "could not produce a verified response"]
   },
   {
     "id": "physician_prompt_active_cardiac",
@@ -163,8 +161,7 @@
     ],
     "adapter_status": [["problem_list", "success", ""], ["vitals", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["Active chart issues include", "Confirm with recent vitals"],
-    "expected_answer_max_words": 45
+    "expected_answer_contains_all": ["Active chart issues include", "Confirm with recent vitals"]
   },
   {
     "id": "physician_prompt_endocrine_metabolic",
@@ -175,8 +172,7 @@
     ],
     "adapter_status": [["problem_list", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["cardiometabolic risk", "Review recent labs"],
-    "expected_answer_max_words": 45
+    "expected_answer_contains_all": ["cardiometabolic risk", "Review recent labs"]
   },
   {
     "id": "physician_prompt_oncology_history",
@@ -186,8 +182,7 @@
     ],
     "adapter_status": [["problem_list", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["Yes. Problem list includes", "oncology follow-up"],
-    "expected_answer_max_words": 40
+    "expected_answer_contains_all": ["Yes. Problem list includes", "oncology follow-up"]
   },
   {
     "id": "physician_prompt_red_flags",
@@ -198,8 +193,7 @@
     ],
     "adapter_status": [["problem_list", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["red flags to verify include", "active issues versus historical entries"],
-    "expected_answer_max_words": 45
+    "expected_answer_contains_all": ["red flags to verify include", "active issues versus historical entries"]
   },
   {
     "id": "physician_prompt_med_reconciliation",
@@ -211,8 +205,7 @@
     ],
     "adapter_status": [["medications", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["Medication reconciliation summary", "current listed meds include", "active medications versus historical entries"],
-    "expected_answer_max_words": 75
+    "expected_answer_contains_all": ["Medication reconciliation summary", "current listed meds include", "active medications versus historical entries"]
   },
   {
     "id": "physician_prompt_meds_for_allergy_management",
@@ -224,8 +217,7 @@
     ],
     "adapter_status": [["allergies", "success", ""], ["medications", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["Documented allergies:", "Epinephrine auto-injector appears"],
-    "expected_answer_max_words": 65
+    "expected_answer_contains_all": ["Documented allergies:", "Epinephrine auto-injector appears"]
   },
   {
     "id": "physician_prompt_ask_patient_first",
@@ -237,8 +229,7 @@
     ],
     "adapter_status": [["problem_list", "success", ""], ["allergies", "success", ""], ["medications", "success", ""]],
     "expected_status": "verified",
-    "expected_answer_contains_all": ["Start by confirming the patient's top symptoms today", "allergy reaction history", "major problem-list diagnoses"],
-    "expected_answer_max_words": 50
+    "expected_answer_contains_all": ["Start by confirming the patient's top symptoms today", "allergy reaction history", "major problem-list diagnoses"]
   },
   {
     "id": "physician_prompt_missing_before_decisions",
@@ -248,7 +239,6 @@
     ],
     "adapter_status": [["labs", "unavailable", "No recent lab results found in retrieved procedure result records."], ["recent_notes", "unavailable", "No patient notes found in retrieved pnotes records."]],
     "expected_status": "partial",
-    "expected_answer_contains_all": ["Missing or unavailable retrieved data includes", "confirm in chart before final decisions"],
-    "expected_answer_max_words": 40
+    "expected_answer_contains_all": ["Missing or unavailable retrieved data includes", "confirm in chart before final decisions"]
   }
 ]

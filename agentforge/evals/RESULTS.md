@@ -8,7 +8,9 @@ Run with:
 PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_evals.py
 ```
 
-The default output is a readable scorecard with each case's input, output, expected status, actual status, warnings, source types, blocked-claim count, and pass/fail result.
+The default output is a readable scorecard with each case's input, output, expected status, actual status, failure reasons, warnings, source types, blocked-claim count, and pass/fail result.
+
+Mock mode keeps strict phrase-based assertions for deterministic regression testing. Live mode uses concept checks for model-written clinical prose so wording variability does not fail an otherwise supported answer.
 
 For machine-readable output:
 

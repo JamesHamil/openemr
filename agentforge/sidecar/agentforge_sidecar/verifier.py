@@ -73,7 +73,7 @@ def verify_response(
             if _adapter_gap_claim_is_supported(claim, request, evidence_plan):
                 checked_claims.append(claim)
                 continue
-            if _first_room_guidance_claim_is_supported(claim, evidence_plan):
+            if _safe_guidance_claim_is_supported(claim, evidence_plan):
                 checked_claims.append(claim)
                 continue
             blocked.append(claim.id)
@@ -90,7 +90,12 @@ def verify_response(
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
-        if not _claim_has_source_overlap(claim, [source_by_id[source_id].value for source_id in claim.source_ids]):
+        source_values = [source_by_id[source_id].value for source_id in claim.source_ids]
+        if not _claim_has_source_overlap(claim, source_values) and not _change_or_conflict_claim_is_supported(
+            claim,
+            source_values,
+            evidence_plan,
+        ):
             blocked.append(claim.id)
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
@@ -145,6 +150,16 @@ def verify_response(
         status = "partial"
     if prompt_injection_found and status == "verified":
         status = "partial"
+    if _should_upgrade_to_verified(
+        status=status,
+        blocked=blocked,
+        prompt_injection_found=prompt_injection_found,
+        request=request,
+        evidence_plan=evidence_plan,
+        claims=display_claims,
+        sources=display_sources,
+    ):
+        status = "verified"
 
     return response.model_copy(
         update={
@@ -202,16 +217,99 @@ def _adapter_gap_claim_is_supported(claim: Claim, request: AgentForgeRequest, ev
     )
 
 
-def _first_room_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan) -> bool:
-    if evidence_plan.answer_family != "first_room":
+def _change_or_conflict_claim_is_supported(
+    claim: Claim,
+    values: list[str],
+    evidence_plan: EvidencePlan,
+) -> bool:
+    if len(values) < 2:
         return False
-    if claim.claim_type not in {"guidance", "question_sequence", "first_room", "question"}:
+    if evidence_plan.answer_family not in {"long_tail", "broad_brief"}:
+        return False
+
+    normalized = claim.text.lower()
+    if claim.claim_type not in {"note", "change", "conflict", "summary"} and not any(
+        term in normalized for term in ("change", "changed", "conflict", "improved", "worsened", "worse", "better")
+    ):
+        return False
+
+    direction_terms = {"improved", "worsened", "worse", "better", "overnight", "morning", "changed", "change"}
+    source_word_sets = [_important_words(value) - direction_terms for value in values]
+    for index, source_words in enumerate(source_word_sets):
+        for other_words in source_word_sets[index + 1 :]:
+            if source_words & other_words:
+                return True
+    return False
+
+
+def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan) -> bool:
+    if evidence_plan.answer_family not in {
+        "allergies",
+        "cardiac",
+        "endocrine_metabolic",
+        "oncology",
+        "red_flags",
+        "med_reconciliation",
+        "first_room",
+        "missing_data",
+        "broad_brief",
+    }:
+        return False
+    if claim.claim_type not in {
+        "guidance",
+        "question_sequence",
+        "first_room",
+        "question",
+        "follow_up",
+        "status_check",
+        "recommendation",
+        "missing_data",
+        "gap",
+        "adapter_status",
+    }:
         return False
 
     normalized = claim.text.lower()
     if any(term in normalized for term in ("prescribe", "order ", "dose", "administer", "discontinue")):
         return False
-    return any(term in normalized for term in ("ask", "confirm", "clarify", "review", "question", "symptom", "history"))
+    return any(
+        term in normalized
+        for term in (
+            "ask",
+            "confirm",
+            "clarify",
+            "review",
+            "question",
+            "symptom",
+            "history",
+            "verify",
+            "follow",
+            "reconcile",
+            "missing",
+            "unavailable",
+            "status",
+        )
+    )
+
+
+def _should_upgrade_to_verified(
+    status: ResponseStatus,
+    blocked: list[str],
+    prompt_injection_found: bool,
+    request: AgentForgeRequest,
+    evidence_plan: EvidencePlan,
+    claims: list[Claim],
+    sources: list,
+) -> bool:
+    if status != "partial":
+        return False
+    if blocked or prompt_injection_found or missing_required_adapters(request, evidence_plan):
+        return False
+    if not claims or not sources:
+        return False
+    if any(claim.support_status != "supported" for claim in claims):
+        return False
+    return True
 
 
 def _can_preserve_answer_after_blocking(
@@ -221,10 +319,21 @@ def _can_preserve_answer_after_blocking(
 ) -> bool:
     if not supported_claims:
         return False
-    if evidence_plan.answer_family not in {"first_room", "missing_data"}:
+    if evidence_plan.answer_family not in {"first_room", "missing_data", "red_flags", "med_reconciliation"}:
         return False
 
-    soft_claim_types = {"guidance", "question_sequence", "first_room", "question", "missing_data", "gap", "adapter_status"}
+    soft_claim_types = {
+        "guidance",
+        "question_sequence",
+        "first_room",
+        "question",
+        "missing_data",
+        "gap",
+        "adapter_status",
+        "follow_up",
+        "status_check",
+        "recommendation",
+    }
     return all(claim.claim_type in soft_claim_types for claim in blocked_claims)
 
 

@@ -33,10 +33,14 @@ not as a canned template. Write naturally for a physician. Do not copy the rubri
 Keep the answer concise and physician-natural: <=180 words, <=8 claims, <=10 displayed sources.
 Start answer with a direct natural-language response to the specific question.
 Avoid unrelated chart inventory unless directly needed for the question.
+Do not mark the response partial just because unrelated data is absent; partial is for relevant missing evidence, failed citations, or incomplete answers.
 If evidence is limited or an important adapter is unavailable, include one short clinician guidance sentence about what to confirm in chart.
 Use compact inline citations only when useful (for example [problem-12]).
 For narrow follow-up questions, sections may be empty and claims may be minimal.
 For broad chart-summary requests, include sections with scannable claims.
+For first-room questions, start with today's symptoms or the patient's main concern, then add chart-specific follow-ups.
+For cardiac questions, separate explicit cardiac diagnoses from risk-related conditions and cite vitals when selected.
+For missing-data questions, name missing data first, then cite any available context second.
 Use answer for the top-line response and claims/sections for supporting details.
 Return only sources that are cited by claims. Keep each extracted_value short.
 Say evidence was not found in retrieved records rather than absent from reality."""

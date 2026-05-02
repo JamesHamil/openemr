@@ -343,6 +343,141 @@ class VerifierTest(unittest.TestCase):
         self.assertIn("based on retrieved chart evidence", verified.answer.lower())
         self.assertNotIn("removed unsupported generated claims", verified.answer.lower())
 
+    def test_supported_lab_partial_is_normalized_to_verified(self):
+        request = request_with_sources(
+            "Give me a chart brief for rounds.",
+            [
+                EvidenceSource(
+                    id="problem-1",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Pneumonia",
+                ),
+                EvidenceSource(
+                    id="lab-1",
+                    record_type="lab",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="procedure_result.result",
+                    value="Potassium; result 5.8; units mmol/L; range 3.5-5.1; abnormal high",
+                ),
+            ],
+            [
+                AdapterStatus(adapter="problem_list", status="success"),
+                AdapterStatus(adapter="labs", status="success"),
+            ],
+        )
+        response = AgentForgeResponse(
+            answer="Patient has pneumonia and potassium is elevated at 5.8 mmol/L.",
+            sections=[],
+            claims=[
+                Claim(
+                    id="claim-problem",
+                    text="Problem list includes Pneumonia.",
+                    claim_type="problem",
+                    source_ids=["problem-1"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="claim-lab",
+                    text="Potassium is elevated at 5.8 mmol/L.",
+                    claim_type="lab",
+                    source_ids=["lab-1"],
+                    support_status="supported",
+                ),
+            ],
+            sources=[
+                ResponseSource(
+                    id="problem-1",
+                    record_type="problem",
+                    display="Problem source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Pneumonia",
+                ),
+                ResponseSource(
+                    id="lab-1",
+                    record_type="lab",
+                    display="Lab source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="procedure_result.result",
+                    extracted_value="Potassium; result 5.8; units mmol/L; range 3.5-5.1; abnormal high",
+                ),
+            ],
+            warnings=[],
+            blocked_claims=[],
+            verification_status="partial",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.verification_status, "verified")
+        self.assertEqual(verified.blocked_claims, [])
+
+    def test_conflicting_note_change_claim_is_preserved(self):
+        request = request_with_sources(
+            "What changed since last review?",
+            [
+                EvidenceSource(
+                    id="note-1",
+                    record_type="note",
+                    recorded_at="2026-04-30T07:00:00Z",
+                    field_path="notes.body",
+                    value="Shortness of breath improved overnight",
+                ),
+                EvidenceSource(
+                    id="note-2",
+                    record_type="note",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="notes.body",
+                    value="Shortness of breath worsened this morning",
+                ),
+            ],
+            [AdapterStatus(adapter="recent_notes", status="success")],
+        )
+        response = AgentForgeResponse(
+            answer="Recent notes conflict: shortness of breath improved overnight, then worsened this morning.",
+            sections=[],
+            claims=[
+                Claim(
+                    id="claim-change",
+                    text="Recent notes conflict about shortness of breath.",
+                    claim_type="change",
+                    source_ids=["note-1", "note-2"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ResponseSource(
+                    id="note-1",
+                    record_type="note",
+                    display="Note source",
+                    recorded_at="2026-04-30T07:00:00Z",
+                    field_path="notes.body",
+                    extracted_value="Shortness of breath improved overnight",
+                ),
+                ResponseSource(
+                    id="note-2",
+                    record_type="note",
+                    display="Note source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="notes.body",
+                    extracted_value="Shortness of breath worsened this morning",
+                ),
+            ],
+            warnings=[],
+            blocked_claims=[],
+            verification_status="partial",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.answer, response.answer)
+        self.assertEqual(verified.verification_status, "verified")
+        self.assertEqual(verified.blocked_claims, [])
+
     def test_missing_data_adapter_gap_claim_does_not_get_rewritten(self):
         request = request_with_sources(
             "What is missing that I need before making clinical decisions?",

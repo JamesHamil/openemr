@@ -156,6 +156,7 @@ def _family_policy(
             ("problem", "allergy", "medication", "note", "lab", "vital"),
             (
                 "Give a concise first-room question sequence grounded in selected chart evidence.",
+                "Start with a general symptom-priority question before chart-specific follow-ups.",
                 "Prioritize today's symptoms, allergy reaction history, medication use, and status of major diagnoses.",
             ),
         )
@@ -186,6 +187,7 @@ def _family_policy(
             ("problem", "allergy", "medication", "vital", "lab", "note", "demographic"),
             (
                 "Produce a compact pre-round summary with active issues, meds/allergies, objective data, and follow-up gaps.",
+                "Do not let one record type crowd out current medications, allergies, or objective data.",
                 "Make missing-data caveats concise.",
             ),
         )
@@ -234,19 +236,28 @@ def _select_sources(request: AgentForgeRequest, family: AnswerFamily) -> list[Ev
     elif family == "med_reconciliation":
         current = [source for source in _by_type(sources, "medication") if source.metadata.get("status", "current") != "historical"]
         historical = [source for source in _by_type(sources, "medication") if source.metadata.get("status") == "historical"]
+        add(_medications_matching(current, ("epinephrine", "auto-injector", "loratadine")), 4)
         add(current, 8)
         add(historical, 6)
     elif family == "first_room":
-        add(_by_type(sources, "problem"), 5)
-        add(_by_type(sources, "allergy"), 4)
-        add(_by_type(sources, "medication"), 4)
+        add(_by_type(sources, "problem"), 3)
+        add(_by_type(sources, "medication"), 3)
+        add(_by_type(sources, "allergy"), 3)
         add(_by_type(sources, "note"), 2)
+        add(_by_type(sources, "vital"), 1)
     elif family == "missing_data":
         add(sources, 10)
     elif family == "labs":
         add(_by_type(sources, "lab"), 8)
     elif family == "broad_brief":
-        for record_type, limit in (("problem", 5), ("allergy", 4), ("medication", 4), ("vital", 4), ("lab", 4), ("note", 2)):
+        for record_type, limit in (
+            ("problem", 3),
+            ("medication", 3),
+            ("allergy", 3),
+            ("vital", 2),
+            ("lab", 2),
+            ("note", 2),
+        ):
             add(_by_type(sources, record_type), limit)
     else:
         add(sources, 10)

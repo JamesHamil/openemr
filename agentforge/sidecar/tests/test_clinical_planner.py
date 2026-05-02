@@ -126,6 +126,86 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(plan.answer_family, "med_reconciliation")
         self.assertEqual(list(plan.selected_source_ids), ["medication-current", "medication-history"])
 
+    def test_broad_brief_reserves_source_budget_across_categories(self):
+        sources = [
+            EvidenceSource(
+                id=f"problem-{index}",
+                record_type="problem",
+                recorded_at="2026-04-30T08:00:00Z",
+                field_path="lists.title",
+                value=f"Problem {index}",
+            )
+            for index in range(1, 6)
+        ]
+        sources.extend(
+            [
+                EvidenceSource(
+                    id=f"medication-{index}",
+                    record_type="medication",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="prescriptions.drug",
+                    value=f"Medication {index}",
+                )
+                for index in range(1, 4)
+            ]
+        )
+        sources.extend(
+            [
+                EvidenceSource(
+                    id=f"allergy-{index}",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value=f"Allergy {index}",
+                )
+                for index in range(1, 5)
+            ]
+        )
+
+        plan = plan_evidence(_request("Give me a one-minute pre-round summary for this patient.", sources))
+
+        selected = set(plan.selected_source_ids)
+        self.assertLessEqual(len([source_id for source_id in selected if source_id.startswith("problem-")]), 3)
+        self.assertTrue({"medication-1", "medication-2", "medication-3"} <= selected)
+        self.assertGreaterEqual(len([source_id for source_id in selected if source_id.startswith("allergy-")]), 3)
+
+    def test_first_room_plan_does_not_let_problems_crowd_out_meds_and_allergies(self):
+        request = _request(
+            "What should I ask the patient first when I enter the room?",
+            [
+                EvidenceSource(
+                    id=f"problem-{index}",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value=f"Problem {index}",
+                )
+                for index in range(1, 6)
+            ]
+            + [
+                EvidenceSource(
+                    id="medication-1",
+                    record_type="medication",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="prescriptions.drug",
+                    value="Loratadine 5 MG",
+                ),
+                EvidenceSource(
+                    id="allergy-1",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Allergy to eggs",
+                ),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertIn("medication-1", plan.selected_source_ids)
+        self.assertIn("allergy-1", plan.selected_source_ids)
+        self.assertLessEqual(len([source_id for source_id in plan.selected_source_ids if source_id.startswith("problem-")]), 3)
+
     def test_missing_required_adapters_is_question_scoped(self):
         request = _request(
             "Any active cardiac issues?",
