@@ -31,7 +31,7 @@ Project documents:
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
 - [PRD.md](PRD.md): execution source of truth for the Clinical Co-Pilot build.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
-- [agentforge/COST_ANALYSIS.md](agentforge/COST_ANALYSIS.md): AI cost and scale analysis.
+- [COST_ANALYSIS.md](COST_ANALYSIS.md): AI cost and scale analysis.
 - [agentforge/evals/EVALS.md](agentforge/evals/EVALS.md): eval philosophy, examples, and evals-vs-unit-tests explanation.
 - [agentforge/evals/RESULTS.md](agentforge/evals/RESULTS.md): current eval runner instructions and latest smoke results.
 

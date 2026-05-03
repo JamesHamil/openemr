@@ -37,7 +37,7 @@ The Railway deployment is configured as separate OpenEMR, MariaDB, and AgentForg
 - `agentforge/sidecar/`: FastAPI sidecar with `/healthz`, `/v1/chat`, mock/real/off modes, verifier, and PHI-safe trace record.
 - `agentforge/contracts/`: request and response JSON schemas.
 - `agentforge/evals/`: smoke eval dataset and runner.
-- `agentforge/COST_ANALYSIS.md`: AI cost and scale analysis.
+- `COST_ANALYSIS.md`: AI cost and scale analysis.
 
 ## Final Audit Coverage
 
