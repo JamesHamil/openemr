@@ -1,5 +1,7 @@
 # AgentForge Eval Results
 
+Testing philosophy and examples are documented in [`EVALS.md`](EVALS.md).
+
 Current default eval target: deterministic sidecar mode and verifier contract. Set `AGENTFORGE_EVAL_MODE=live` to run the same fixtures through real mode with OpenAI credentials.
 
 Run with:

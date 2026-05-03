@@ -32,6 +32,8 @@ Project documents:
 - [PRD.md](PRD.md): execution source of truth for the Clinical Co-Pilot build.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
 - [agentforge/COST_ANALYSIS.md](agentforge/COST_ANALYSIS.md): AI cost and scale analysis.
+- [agentforge/evals/EVALS.md](agentforge/evals/EVALS.md): eval philosophy, examples, and evals-vs-unit-tests explanation.
+- [agentforge/evals/RESULTS.md](agentforge/evals/RESULTS.md): current eval runner instructions and latest smoke results.
 
 The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority.
 
