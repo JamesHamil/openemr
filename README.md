@@ -26,18 +26,18 @@ Current deployed checkpoint: https://openemr-production-5533.up.railway.app
 
 Project documents:
 
-- [AUDIT.md](AUDIT.md): security, performance, architecture, data quality, and compliance audit findings.
+- [AUDIT.md](AUDIT.md): final security, performance, architecture, data quality, and compliance audit.
 - [USERS.md](USERS.md): target hospitalist user, workflow, and use cases.
 - [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
 - [PRD.md](PRD.md): execution source of truth for the Clinical Co-Pilot build.
 - [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
 - [agentforge/COST_ANALYSIS.md](agentforge/COST_ANALYSIS.md): AI cost and scale analysis.
 
-The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, but the sidecar receives only bounded evidence bundles from OpenEMR and will not have direct database credentials or independent chart-retrieval authority.
+The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority.
 
-The first execution slice now includes an OpenEMR custom module shell at `interface/modules/custom_modules/agentforge/`, shared contracts under `agentforge/contracts/`, a FastAPI sidecar under `agentforge/sidecar/`, and eval smoke tests under `agentforge/evals/`. The public Railway OpenEMR deployment remains demo-data-only and should not be treated as production HIPAA-ready. Real OpenAI mode is intentionally disabled unless a server-side `OPENAI_API_KEY` and review-ready configuration are supplied.
+The first execution slice now includes an OpenEMR custom module shell at `interface/modules/custom_modules/agentforge/`, shared contracts under `agentforge/contracts/`, a FastAPI sidecar under `agentforge/sidecar/`, and eval smoke tests under `agentforge/evals/`. The public Railway OpenEMR deployment remains demo-data-only, with production HIPAA readiness reserved for the compliance gate described in `AUDIT.md`. Real OpenAI mode is enabled only with a server-side `OPENAI_API_KEY` and reviewed configuration.
 
-This checkpoint is demo-data-only. Do not use real PHI with the Railway deployment, and do not treat the deployment as production HIPAA-ready.
+This checkpoint is demo-data-only. Use synthetic or demo patient data with the Railway deployment.
 
 ### Local OpenEMR With Sample Patients
 
@@ -67,7 +67,7 @@ The local audit and architecture work should be done against a runnable OpenEMR 
    Admin -> Globals -> Connectors -> Enable C-CDA Service
    ```
 
-   Choose `Care Coordination Only` or `Both`, then save. If the module is still hidden, go to `Modules -> Manage Modules` and enable the Carecoordination module and any required dependencies.
+   Choose `Care Coordination Only` or `Both`, then save. If needed, go to `Modules -> Manage Modules` and enable the Carecoordination module and any required dependencies.
 
 6. Import the synthetic patients:
 
@@ -85,13 +85,13 @@ The local audit and architecture work should be done against a runnable OpenEMR 
 
    Search for the imported patient name and confirm that demographics, medications, problems, allergies, vitals, and notes imported well enough to support audit and architecture testing.
 
-Do not use real PHI in local development. The sample-patient workflow is intentionally synthetic and is meant to support system analysis, demo preparation, and later evidence-bundle testing.
+Use synthetic patient data in local development. The sample-patient workflow is intentionally synthetic and is meant to support system analysis, demo preparation, and later evidence-bundle testing.
 
 The Railway deployment uses a small `Dockerfile.railway` based on the official OpenEMR image so the submitted checkpoint is built from this fork while preserving the known OpenEMR runtime. Railway is configured with separate OpenEMR, MariaDB, and `agentforge-sidecar` services; OpenEMR reaches the sidecar over Railway private networking.
 
 ### AgentForge Runtime Configuration
 
-The OpenEMR module calls the sidecar when these server-side variables are configured:
+The OpenEMR module calls the sidecar when these server-side variables are configured. `AGENTFORGE_SIGNING_SECRET` is required; missing secrets fail closed instead of using a development default.
 
 ```text
 AGENTFORGE_SIDECAR_URL=http://agentforge-sidecar:8000

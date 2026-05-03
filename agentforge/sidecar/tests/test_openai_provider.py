@@ -22,8 +22,10 @@ from agentforge_sidecar.schemas import (
     ResponseSource,
     RoundingContextBundle,
     Scope,
+    ToolPhaseResult,
 )
 from agentforge_sidecar.settings import Settings
+from agentforge_sidecar.tool_agent import ToolPhaseDiagnostics
 
 
 class _Parsed:
@@ -184,6 +186,58 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.source_selection_mode, "planner")
         self.assertEqual(diagnostics.tool_call_count, 0)
         self.assertEqual(diagnostics.planning_latency_ms, 0)
+
+    def test_openai_response_uses_model_tool_phase_for_low_confidence_plan(self):
+        request = _request().model_copy(update={"message": "What is the zebulon index?"})
+        composed = ModelAgentForgeResponse(
+            answer="Retrieved chart evidence shows allergy to eggs. [allergy-1]",
+            claims=[
+                Claim(
+                    id="claim-1",
+                    text="Retrieved chart evidence shows Allergy to eggs.",
+                    claim_type="allergy",
+                    source_ids=["allergy-1"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ModelResponseSource(
+                    id="allergy-1",
+                    record_type="allergy",
+                    display="Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Allergy to eggs",
+                )
+            ],
+            verification_status="verified",
+            trace_id="trace-test",
+        )
+        client = _FakeClient(
+            [
+                composed,
+                ModelVerificationResult(
+                    result="passed",
+                    status_recommendation="verified",
+                    citation_coverage=1.0,
+                ),
+            ]
+        )
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                run_tool_phase.return_value = (
+                    ToolPhaseResult(selected_source_ids=["allergy-1"], focus="Model selected source."),
+                    ToolPhaseDiagnostics(tool_call_count=1, planning_latency_ms=123),
+                )
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_called_once()
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.source_selection_mode, "model_tool_phase")
+        self.assertEqual(diagnostics.tool_call_count, 1)
+        self.assertEqual(diagnostics.planning_latency_ms, 123)
 
     def test_model_verifier_repair_loop_returns_repaired_response(self):
         request = _request()

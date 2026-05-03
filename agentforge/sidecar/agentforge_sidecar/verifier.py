@@ -73,9 +73,6 @@ def verify_response(
             if _adapter_gap_claim_is_supported(claim, request, evidence_plan):
                 checked_claims.append(claim)
                 continue
-            if _safe_guidance_claim_is_supported(claim, evidence_plan):
-                checked_claims.append(claim)
-                continue
             blocked.append(claim.id)
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
@@ -93,18 +90,14 @@ def verify_response(
         if _adapter_gap_claim_is_supported(claim, request, evidence_plan):
             checked_claims.append(claim)
             continue
-        if _safe_guidance_claim_is_supported(claim, evidence_plan):
-            checked_claims.append(claim)
-            continue
 
         source_values = [source_by_id[source_id].value for source_id in claim.source_ids]
         if (
             not _claim_has_source_overlap(claim, source_values)
-            and not _clinical_synthesis_claim_is_supported(claim, source_values, evidence_plan)
             and not _change_or_conflict_claim_is_supported(
-            claim,
-            source_values,
-            evidence_plan,
+                claim,
+                source_values,
+                evidence_plan,
             )
         ):
             blocked.append(claim.id)
@@ -251,140 +244,6 @@ def _change_or_conflict_claim_is_supported(
             if source_words & other_words:
                 return True
     return False
-
-
-def _clinical_synthesis_claim_is_supported(
-    claim: Claim,
-    values: list[str],
-    evidence_plan: EvidencePlan,
-) -> bool:
-    if evidence_plan.answer_family not in {
-        "cardiac",
-        "endocrine_metabolic",
-        "oncology",
-        "red_flags",
-        "med_reconciliation",
-        "first_room",
-        "missing_data",
-        "broad_brief",
-    }:
-        return False
-    normalized = claim.text.lower()
-    if any(term in normalized for term in ("prescribe", "order ", "dose", "administer", "discontinue")):
-        return False
-    source_words = set()
-    for value in values:
-        source_words.update(_important_words(value))
-    if _important_words(claim.text) & source_words:
-        return True
-    return any(
-        term in normalized
-        for term in (
-            "risk",
-            "factor",
-            "confirm",
-            "verify",
-            "review",
-            "active",
-            "history",
-            "historical",
-            "follow-up",
-            "follow up",
-            "status",
-            "legacy",
-            "current",
-            "missing",
-            "unavailable",
-            "not selected",
-            "not retrieved",
-        )
-    )
-
-
-def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan) -> bool:
-    if evidence_plan.answer_family not in {
-        "allergies",
-        "cardiac",
-        "endocrine_metabolic",
-        "oncology",
-        "red_flags",
-        "med_reconciliation",
-        "first_room",
-        "missing_data",
-        "change_since_review",
-        "broad_brief",
-    }:
-        return False
-    if claim.claim_type not in {
-        "guidance",
-        "question_sequence",
-        "first_room",
-        "question",
-        "follow_up",
-        "status_check",
-        "recommendation",
-        "missing_data",
-        "gap",
-        "adapter_status",
-        "synthesis",
-        "clinical_synthesis",
-        "assessment",
-        "interpretation",
-        "risk",
-        "risk_assessment",
-        "reconciliation",
-        "medication_reconciliation",
-        "followup",
-        "limitation",
-        "limited_context",
-        "missing_context",
-        "missing_adapters",
-        "missing_key_context",
-        "missing_objective_data",
-        "context_limit",
-        "data_gap",
-        "caveat",
-    }:
-        return False
-
-    normalized = claim.text.lower()
-    if any(term in normalized for term in ("prescribe", "order ", "dose", "administer", "discontinue")):
-        return False
-    return any(
-        term in normalized
-        for term in (
-            "ask",
-            "confirm",
-            "clarify",
-            "review",
-            "question",
-            "symptom",
-            "history",
-            "verify",
-            "follow",
-            "reconcile",
-            "missing",
-            "unavailable",
-            "available",
-            "limited",
-            "context",
-            "data",
-            "selected",
-            "retrieved",
-            "shown",
-            "provided",
-            "status",
-            "active",
-            "historical",
-            "legacy",
-            "risk",
-            "factor",
-            "issue",
-            "issues",
-            "decision",
-            "checked",
-        )
-    )
 
 
 def _should_upgrade_to_verified(

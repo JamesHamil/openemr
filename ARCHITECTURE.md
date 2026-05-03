@@ -12,7 +12,7 @@ This separation is deliberate. Putting all AI orchestration directly into OpenEM
 
 The initial delivered agent capability is read-only. It will not write notes, orders, diagnoses, medication changes, billing records, or tasks. A hospitalist may use it to understand the retrieved chart faster, but not to delegate clinical decisions. The first capability is a chart brief for rounds: active problems, recent changes, notable labs/vitals, current medications, allergies, documented pending items, warnings about missing data, and citations to the underlying records. This should not imply complete inpatient MAR, order, or task coverage unless those OpenEMR adapters are actually implemented. Follow-up questions are allowed only inside the same patient context and only when the answer can be grounded in the evidence bundle.
 
-Verification is the safety core. The model must return structured claims with source IDs, source record types, source field paths or note spans, extracted values, and source timestamps. A verification layer checks that each factual clinical claim is supported by the supplied evidence bundle, not merely that it cites a real source. Unsupported claims are removed, rewritten as uncertainty, or refused. The UI should display source chips or expandable citations so the hospitalist can inspect the evidence. Missing or stale data must be stated transparently; the assistant must not convert absent evidence into a confident clinical conclusion.
+Verification is the safety core, but it is bounded decision support rather than a guarantee of clinical truth. The model must return structured factual claims with source IDs, source record types, source field paths or note spans, extracted values, and source timestamps. A verification layer checks source membership and source-value support inside the supplied evidence bundle, not merely that the model cited a real source. Unsupported claims are removed, rewritten as uncertainty, or refused, while general clinician guidance belongs in answer prose or warnings rather than in verified claims. The UI should display source chips or expandable citations so the hospitalist can inspect the evidence. Missing or stale data must be stated transparently; the assistant must not convert absent evidence into a confident clinical conclusion.
 
 ## Executive Position
 
@@ -34,6 +34,16 @@ The first supported use cases are:
 The physician remains the human decision-maker. The assistant can summarize retrieved evidence and expose uncertainty, but it cannot make or execute clinical decisions.
 
 The architecture is built around a simple principle: the sidecar may transform a pre-authorized evidence bundle, but it may not fetch, expand, cache, or authorize clinical data.
+
+## Final Audit Alignment
+
+The final submission audit maps the implementation across five review areas:
+
+- **Security:** OpenEMR owns authentication, session state, patient context, ACL checks, CSRF checks, rate limiting, evidence gathering, and patient-linked audit events. Sidecar calls use signed, short-lived requests and server-side secrets.
+- **Performance:** Evidence collectors are bounded by category and record count, adapter status includes latency fields, and the sidecar records total latency plus model-stage timing when real mode is used.
+- **Architecture:** The OpenEMR module, evidence bundle, sidecar, verifier, evals, and Railway deployment remain separated by clear trust and runtime boundaries inside the same fork.
+- **Data quality:** Source records are normalized into a consistent verifier shape, and adapter status carries unavailable, partial, and failed retrieval states.
+- **Compliance:** The project keeps the submission deployment demo-data-only, uses PHI-safe sidecar telemetry by default, and reserves real PHI use for institutional compliance, retention, incident-response, and vendor-review gates.
 
 ## System Architecture
 
@@ -345,14 +355,15 @@ Sidecar request body:
 
 ## Verification Strategy
 
-The sidecar cannot stream unverified model text directly to the physician. It must produce a structured response containing claims, source IDs, source field paths or note spans, extracted values, and source timestamps, then pass that response through a verifier.
+The sidecar cannot stream unverified model text directly to the physician. It must produce a structured response containing claims, source IDs, source field paths or note spans, extracted values, and source timestamps, then pass that response through a bounded source-support verifier. This verifier is meant to block unsupported claims and expose uncertainty; it does not replace clinician review or institution-specific clinical validation.
 
 ### Verification Rules
 
-- Every factual clinical claim must have at least one source ID and a source-bound assertion.
+- Every factual clinical claim must have at least one source ID and a source-bound assertion, except explicit missing-data claims that are supported by adapter status.
 - Medication, allergy, lab, vital, problem, and note claims must cite the specific retrieved record plus the supporting field path, extracted value, or note span.
 - A real source ID is not sufficient by itself; the verifier must confirm the cited source actually supports the claim text.
-- Claims without sources are removed or rewritten as uncertainty.
+- Claims without sources are removed or rewritten as uncertainty unless they are explicit adapter-gap claims.
+- General confirm/review guidance may appear in answer prose or warnings, but it is not treated as a verified factual claim unless directly supported by source values.
 - Conflicting sources are surfaced as conflict, not resolved by model preference.
 - Missing data is stated as missing from retrieved records, not absent from reality.
 - Treatment recommendations are refused or reframed as record-backed issues for physician review.
@@ -463,7 +474,7 @@ Services:
 
 The sidecar should have a health check endpoint so OpenEMR can fail closed with a controlled unavailable response. The rollback path is to disable the AgentForge module or route it to mock/off mode; rollback should not require database migration reversal for the initial read-only slice.
 
-LLM API keys and sidecar signing secrets must be server-side configuration only. They are never committed, exposed in the browser, stored in client-side JavaScript, or logged in traces.
+LLM API keys and sidecar signing secrets must be server-side configuration only. They are never committed, exposed in the browser, stored in client-side JavaScript, or logged in traces. `AGENTFORGE_SIGNING_SECRET` is required for module-to-sidecar requests; missing secrets fail closed instead of falling back to a development default.
 
 CI/CD for agent updates should require schema tests and eval smoke tests before deployment. A failed sidecar deployment should not break OpenEMR core workflows; the module should degrade to a controlled unavailable or mock/off state.
 

@@ -9,13 +9,27 @@ class AgentForgeEvidenceCollector
         $sources = [];
         $statuses = [];
 
-        $this->collectPatientSnapshot($pid, $sources, $statuses);
-        $this->collectProblems($pid, $sources, $statuses);
-        $this->collectAllergies($pid, $sources, $statuses);
-        $this->collectMedications($pid, $message, $sources, $statuses);
-        $this->collectVitals($pid, $sources, $statuses);
-        $this->collectLabs($pid, $sources, $statuses);
-        $this->collectNotes($pid, $sources, $statuses);
+        $this->collectAdapter('patient_snapshot', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectPatientSnapshot($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('problem_list', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectProblems($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('allergies', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectAllergies($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('medications', function () use ($pid, $message, &$sources, &$statuses): void {
+            $this->collectMedications($pid, $message, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('vitals', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectVitals($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('labs', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectLabs($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('recent_notes', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectNotes($pid, $sources, $statuses);
+        }, $statuses);
 
         return [
             'id' => 'bundle-' . bin2hex(random_bytes(8)),
@@ -59,24 +73,9 @@ class AgentForgeEvidenceCollector
     private function collectAllergies(string $pid, array &$sources, array &$statuses): void
     {
         $count = $this->collectActiveIssueSources($pid, 'allergy', 'allergy', 'allergy', $sources, 6);
-        if ($count === 0) {
-            $this->addSource(
-                $sources,
-                'allergy-none-' . $pid,
-                'allergy',
-                'lists.type=allergy',
-                'No active allergies reported in retrieved OpenEMR allergy lists.',
-                gmdate('c'),
-                '',
-                [
-                    'status' => 'absent',
-                    'source_table' => 'lists',
-                    'issue_type' => 'allergy',
-                    'active' => '0',
-                ]
-            );
-        }
-        $statuses[] = $this->status('allergies', 'success');
+        $statuses[] = $count === 0
+            ? $this->status('allergies', 'unavailable', 'No active allergy records found in retrieved lists.')
+            : $this->status('allergies', 'success');
     }
 
     private function collectActiveIssueSources(
@@ -336,13 +335,40 @@ class AgentForgeEvidenceCollector
         $sources[] = $source;
     }
 
-    private function status(string $adapter, string $status, string $reason = ''): array
+    private function collectAdapter(string $adapter, callable $collector, array &$statuses): void
     {
-        return [
+        $started = microtime(true);
+        $statusCount = count($statuses);
+        try {
+            $collector();
+        } catch (\Throwable $e) {
+            $statuses[] = $this->status($adapter, 'failed', $e->getMessage());
+        }
+
+        $latencyMs = (int)round((microtime(true) - $started) * 1000);
+        if (count($statuses) === $statusCount) {
+            $statuses[] = $this->status($adapter, 'success', '', $latencyMs);
+            return;
+        }
+
+        for ($index = $statusCount; $index < count($statuses); $index++) {
+            if (!isset($statuses[$index]['latency_ms'])) {
+                $statuses[$index]['latency_ms'] = $latencyMs;
+            }
+        }
+    }
+
+    private function status(string $adapter, string $status, string $reason = '', ?int $latencyMs = null): array
+    {
+        $payload = [
             'adapter' => $adapter,
             'status' => $status,
             'reason' => $reason,
         ];
+        if ($latencyMs !== null) {
+            $payload['latency_ms'] = $latencyMs;
+        }
+        return $payload;
     }
 
     private function isActiveIssueRow(array $row): bool

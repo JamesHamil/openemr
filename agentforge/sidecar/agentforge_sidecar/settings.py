@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class Settings:
     mode: str = "mock"
     model: str = "gpt-4.1-mini"
-    signing_secret: str = "dev-agentforge-signing-secret"
+    signing_secret: str = ""
     openai_api_key: str = ""
     request_ttl_seconds: int = 300
     langfuse_enabled: bool = False
@@ -32,7 +32,7 @@ def load_settings() -> Settings:
     return Settings(
         mode=mode,
         model=os.getenv("AGENTFORGE_OPENAI_MODEL", "gpt-4.1-mini"),
-        signing_secret=os.getenv("AGENTFORGE_SIGNING_SECRET", "dev-agentforge-signing-secret"),
+        signing_secret=os.getenv("AGENTFORGE_SIGNING_SECRET", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         request_ttl_seconds=ttl,
         langfuse_enabled=_env_bool("AGENTFORGE_LANGFUSE_ENABLED", False),

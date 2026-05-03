@@ -37,6 +37,7 @@ Start answer with a direct natural-language response to the specific question.
 Avoid unrelated chart inventory unless directly needed for the question.
 Do not mark the response partial just because unrelated data is absent; partial is for relevant missing evidence, failed citations, or incomplete answers.
 If evidence is limited or an important adapter is unavailable, include one short clinician guidance sentence about what to confirm in chart.
+Put general clinician caveats, confirm/review language, and safety guidance in answer or warnings, not in claims, unless the wording is directly supported by selected evidence.
 Use compact inline citations only when useful (for example [problem-12]).
 For narrow follow-up questions, sections may be empty and claims may be minimal.
 For broad chart-summary requests, include sections with scannable claims.
@@ -131,7 +132,11 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
         )
     try:
         client = OpenAI()
-        source_selection_mode = "planner" if evidence_plan.selected_source_ids else "model_tool_phase"
+        source_selection_mode = (
+            "planner"
+            if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
+            else "model_tool_phase"
+        )
         if source_selection_mode == "planner":
             tool_plan = _planner_tool_phase_result(request, evidence_plan)
             tool_diag = ToolPhaseDiagnostics()
@@ -648,6 +653,8 @@ def _merge_source_ids(*source_id_groups: list[str] | tuple[str, ...]) -> list[st
 def _plan_payload(plan: EvidencePlan) -> dict:
     return {
         "answer_family": plan.answer_family,
+        "secondary_families": list(plan.secondary_families),
+        "confidence": plan.confidence,
         "required_adapters": list(plan.required_adapters),
         "context_adapters": list(plan.context_adapters),
         "needed_adapters": list(plan.needed_adapters),

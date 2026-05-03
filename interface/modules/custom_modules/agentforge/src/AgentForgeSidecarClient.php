@@ -11,7 +11,11 @@ class AgentForgeSidecarClient
             return $this->fallbackResponse('AgentForge sidecar URL is not configured.');
         }
 
-        $secret = (string)(getenv('AGENTFORGE_SIGNING_SECRET') ?: 'dev-agentforge-signing-secret');
+        $secret = (string)getenv('AGENTFORGE_SIGNING_SECRET');
+        if ($secret === '') {
+            return $this->fallbackResponse('AgentForge signing secret is not configured.');
+        }
+
         $body = $this->canonicalJson($payload);
         $signature = hash_hmac('sha256', $body, $secret);
 

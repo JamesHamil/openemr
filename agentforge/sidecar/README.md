@@ -25,6 +25,8 @@ AGENTFORGE_SIDECAR_URL=http://sidecar-host:8000
 AGENTFORGE_SIGNING_SECRET=<shared secret>
 ```
 
+`AGENTFORGE_SIGNING_SECRET` is required for `/v1/chat`; the sidecar rejects signed chat requests when it is not configured.
+
 ## Langfuse Observability
 
 Langfuse tracing is optional and disabled by default. Metadata-only tracing is the default when enabled; raw user messages, chart evidence, prompts, model outputs, and answers are not sent unless payload capture is explicitly enabled.
@@ -44,8 +46,8 @@ Use `AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=true` only in an approved environment 
 ## Tests
 
 ```shell
-PYTHONPATH=agentforge/sidecar python3 -m unittest discover -s agentforge/sidecar/tests
-PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_evals.py
+PYTHONPATH=agentforge/sidecar agentforge/sidecar/.venv/bin/python -m unittest discover -s agentforge/sidecar/tests
+PYTHONPATH=agentforge/sidecar agentforge/sidecar/.venv/bin/python agentforge/evals/run_evals.py
 ```
 
 Set `AGENTFORGE_EVAL_MODE=live` to run the smoke evals through real mode with OpenAI credentials. The default remains deterministic mock mode for local and CI runs.

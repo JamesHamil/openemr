@@ -41,6 +41,9 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(classify_question("Any active cardiac issues?"), "cardiac")
         self.assertEqual(classify_question("Medication reconciliation summary?"), "med_reconciliation")
         self.assertEqual(classify_question("What changed since last review?"), "change_since_review")
+        self.assertEqual(classify_question("ASCVD risk?"), "cardiac")
+        self.assertEqual(classify_question("Any contraindications before I prescribe?"), "allergies")
+        self.assertEqual(classify_question("How should I think about this patient?"), "broad_brief")
 
     def test_allergy_plan_selects_allergies_and_risk_meds(self):
         request = _request(
@@ -77,27 +80,18 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertIn("medication-1", plan.selected_source_ids)
         self.assertNotIn("problem-1", plan.selected_source_ids)
 
-    def test_allergy_plan_selects_negative_allergy_evidence(self):
+    def test_allergy_plan_does_not_select_synthetic_negative_evidence(self):
         request = _request(
             "What allergies do I need to know before ordering anything?",
-            [
-                EvidenceSource(
-                    id="allergy-none-123",
-                    record_type="allergy",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    metadata={"status": "absent"},
-                ),
-            ],
-            [AdapterStatus(adapter="allergies", status="success")],
+            [],
+            [AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found.")],
         )
 
         plan = plan_evidence(request)
 
         self.assertEqual(plan.answer_family, "allergies")
-        self.assertEqual(list(plan.selected_source_ids), ["allergy-none-123"])
-        self.assertEqual(missing_required_adapters(request, plan), [])
+        self.assertEqual(list(plan.selected_source_ids), [])
+        self.assertEqual(missing_required_adapters(request, plan), ["allergies"])
 
     def test_med_rec_plan_includes_historical_medications(self):
         request = _request(
@@ -241,6 +235,100 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(plan.answer_family, "change_since_review")
         self.assertEqual(list(plan.selected_source_ids), ["note-2", "note-1"])
         self.assertEqual(plan.required_adapters, ("recent_notes",))
+
+    def test_ascvd_synonym_selects_cardiometabolic_risk_evidence(self):
+        request = _request(
+            "ASCVD risk?",
+            [
+                EvidenceSource(
+                    id="problem-lipid",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Hyperlipidemia",
+                ),
+                EvidenceSource(
+                    id="problem-prediabetes",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Prediabetes",
+                ),
+                EvidenceSource(
+                    id="vital-bp",
+                    record_type="vital",
+                    recorded_at="2026-04-30T08:01:00Z",
+                    field_path="vitals.bp",
+                    value="Blood pressure 137/89 mmHg",
+                ),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "cardiac")
+        self.assertGreaterEqual(plan.confidence, 0.8)
+        self.assertIn("problem-lipid", plan.selected_source_ids)
+        self.assertIn("problem-prediabetes", plan.selected_source_ids)
+        self.assertIn("vital-bp", plan.selected_source_ids)
+
+    def test_multi_intent_question_combines_secondary_family_sources(self):
+        request = _request(
+            "Can you summarize her cancer history and current meds?",
+            [
+                EvidenceSource(
+                    id="problem-cancer",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Malignant neoplasm of breast",
+                ),
+                EvidenceSource(
+                    id="medication-current",
+                    record_type="medication",
+                    recorded_at="2026-04-30T08:01:00Z",
+                    field_path="prescriptions.drug",
+                    value="Loratadine 5 MG",
+                    metadata={"status": "current"},
+                ),
+                EvidenceSource(
+                    id="allergy-egg",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:02:00Z",
+                    field_path="lists.title",
+                    value="Egg allergy",
+                ),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "oncology")
+        self.assertIn("med_reconciliation", plan.secondary_families)
+        self.assertIn("problem-cancer", plan.selected_source_ids)
+        self.assertIn("medication-current", plan.selected_source_ids)
+        self.assertNotIn("allergy-egg", plan.selected_source_ids)
+        self.assertIn("medications", plan.needed_adapters)
+
+    def test_unknown_specific_question_is_low_confidence_even_with_sources(self):
+        plan = plan_evidence(
+            _request(
+                "What is the zebulon index?",
+                [
+                    EvidenceSource(
+                        id="problem-1",
+                        record_type="problem",
+                        recorded_at="2026-04-30T08:00:00Z",
+                        field_path="lists.title",
+                        value="Pneumonia",
+                    )
+                ],
+            )
+        )
+
+        self.assertEqual(plan.answer_family, "long_tail")
+        self.assertLess(plan.confidence, 0.5)
+        self.assertIn("problem-1", plan.selected_source_ids)
 
     def test_missing_required_adapters_is_question_scoped(self):
         request = _request(

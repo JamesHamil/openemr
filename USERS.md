@@ -56,8 +56,8 @@ The output is used to orient the physician, not to make autonomous decisions. Th
 
 - The committed first user remains the hospitalist preparing for inpatient rounds.
 - The first delivered capability is read-only chart synthesis with source-backed verification.
-- Writing notes, orders, prescriptions, diagnoses, billing records, or tasks is a later expansion only after the evidence and verification architecture is proven.
-- Broad multi-patient search is a later expansion because it raises different authorization, latency, and audit risks.
-- Nurse-specific action plans are a future product direction, not the initial workflow, because they require bedside task, MAR, flowsheet, and care-plan integrations.
+- Writing notes, orders, prescriptions, diagnoses, billing records, or tasks belongs to a later expansion after the evidence and verification architecture is proven.
+- Broad multi-patient search belongs to a later expansion with its own authorization, latency, and audit design.
+- Nurse-specific action plans are a future product direction with bedside task, MAR, flowsheet, and care-plan integrations.
 - Real PHI and production HIPAA deployment require a separate compliance gate before use.
-- The current checkpoint does not yet include a deployed working AI sidecar, but the sidecar architecture is the committed project direction.
+- The current checkpoint includes a deployed module and sidecar path for demo-data workflows, while real PHI and production use remain behind a separate compliance gate.

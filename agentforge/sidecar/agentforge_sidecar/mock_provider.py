@@ -84,7 +84,7 @@ def mock_response(request: AgentForgeRequest, trace_id: str) -> AgentForgeRespon
 
     if not claims:
         return AgentForgeResponse(
-            answer="I could not find supported facts in the retrieved evidence bundle.",
+            answer=_natural_answer(request.message, response_sources, request.evidence_bundle.adapter_status),
             sections=[],
             claims=[],
             sources=[],
@@ -116,8 +116,7 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
     by_type = _group_sources(sources)
     problems = by_type.get("problem", [])
     allergies = by_type.get("allergy", [])
-    positive_allergies = [source for source in allergies if source.metadata.get("status") != "absent"]
-    negative_allergies = [source for source in allergies if source.metadata.get("status") == "absent"]
+    positive_allergies = allergies
     meds = by_type.get("medication", [])
     labs = by_type.get("lab", [])
     notes = by_type.get("note", [])
@@ -142,8 +141,6 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
             sentences.append(f"Problem list includes {_join_values(problems)}.")
         if positive_allergies:
             sentences.append(f"Allergies include {_join_values(positive_allergies)}.")
-        elif negative_allergies:
-            sentences.append("No active allergies were reported in the retrieved allergy list.")
         else:
             sentences.append("No active allergy records were found in this retrieved snapshot.")
         if meds:
@@ -157,8 +154,6 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
     if "allerg" in normalized:
         if positive_allergies:
             response = f"Documented allergies: {_join_values(positive_allergies)}."
-        elif negative_allergies:
-            response = "No active allergies were reported in the retrieved allergy list."
         else:
             response = "No active allergy records were found in the retrieved snapshot."
         if any("epinephrine" in source.extracted_value.lower() for source in meds):

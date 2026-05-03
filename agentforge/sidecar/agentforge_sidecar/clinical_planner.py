@@ -30,6 +30,8 @@ class EvidencePlan:
     preferred_record_types: tuple[str, ...] = ()
     selected_source_ids: tuple[str, ...] = ()
     rubric: tuple[str, ...] = ()
+    secondary_families: tuple[AnswerFamily, ...] = ()
+    confidence: float = 1.0
 
     @property
     def needed_adapters(self) -> tuple[str, ...]:
@@ -38,8 +40,9 @@ class EvidencePlan:
 
 def plan_evidence(request: AgentForgeRequest) -> EvidencePlan:
     family = classify_question(request.message)
-    selected = _select_sources(request, family)
-    required, context, record_types, rubric = _family_policy(family)
+    secondary_families = _secondary_families(request.message, family)
+    selected = _select_sources(request, family, secondary_families)
+    required, context, record_types, rubric = _combined_family_policy(family, secondary_families)
     return EvidencePlan(
         answer_family=family,
         required_adapters=required,
@@ -47,6 +50,8 @@ def plan_evidence(request: AgentForgeRequest) -> EvidencePlan:
         preferred_record_types=record_types,
         selected_source_ids=tuple(source.id for source in selected),
         rubric=rubric,
+        secondary_families=secondary_families,
+        confidence=_planner_confidence(request.message, family, secondary_families),
     )
 
 
@@ -68,13 +73,86 @@ def classify_question(message: str) -> AnswerFamily:
         return "oncology"
     if "endocrine" in normalized or "metabolic" in normalized or "cardiometabolic" in normalized:
         return "endocrine_metabolic"
-    if any(term in normalized for term in ("cardiac", "heart", "cardiology")):
+    if any(
+        term in normalized
+        for term in (
+            "cardiac",
+            "heart",
+            "cardiology",
+            "ascvd",
+            "cardiovascular",
+            "cv risk",
+            "bp",
+            "blood pressure",
+        )
+    ):
         return "cardiac"
-    if "allerg" in normalized:
+    if any(
+        term in normalized
+        for term in (
+            "allerg",
+            "atopy",
+            "reaction",
+            "sensitivity",
+            "anaphylaxis",
+            "contraindication",
+            "contraindicated",
+            "anything i should avoid",
+            "safe to give",
+            "before i prescribe",
+        )
+    ):
         return "allergies"
-    if any(term in normalized for term in ("chart brief", "pre-round", "preround", "rounds", "one-minute")):
+    if any(
+        term in normalized
+        for term in (
+            "chart brief",
+            "pre-round",
+            "preround",
+            "rounds",
+            "one-minute",
+            "what's going on",
+            "what is going on",
+            "anything concerning",
+            "most important",
+            "prioritize",
+            "how should i think",
+        )
+    ):
         return "broad_brief"
     return "long_tail"
+
+
+def _secondary_families(message: str, primary: AnswerFamily) -> tuple[AnswerFamily, ...]:
+    normalized = " ".join(message.lower().split())
+    secondary: list[AnswerFamily] = []
+
+    def add(family: AnswerFamily, terms: tuple[str, ...]) -> None:
+        if family == primary or family in secondary:
+            return
+        if any(term in normalized for term in terms):
+            secondary.append(family)
+
+    add("oncology", ("oncolog", "cancer", "neoplasm", "malignant"))
+    add("med_reconciliation", ("current meds", "current medications", "meds", "medications", "medication list"))
+    add("allergies", ("allerg", "atopy", "reaction", "sensitivity", "anaphylaxis"))
+    add("cardiac", ("ascvd", "cardiac", "heart", "cardiovascular", "bp", "blood pressure"))
+    add("endocrine_metabolic", ("endocrine", "metabolic", "cardiometabolic", "diabetes", "prediabetes", "lipid"))
+    add("change_since_review", ("what changed", "changed since", "since last review", "trajectory", "overnight", "worse", "improved"))
+    return tuple(secondary[:3])
+
+
+def _planner_confidence(message: str, family: AnswerFamily, secondary_families: tuple[AnswerFamily, ...]) -> float:
+    if family == "long_tail":
+        return 0.3
+    if secondary_families:
+        return 0.85
+    if family == "broad_brief" and any(
+        term in " ".join(message.lower().split())
+        for term in ("what's going on", "what is going on", "anything concerning", "how should i think")
+    ):
+        return 0.65
+    return 0.95
 
 
 def missing_required_adapters(request: AgentForgeRequest, plan: EvidencePlan | None = None) -> list[str]:
@@ -216,7 +294,43 @@ def _family_policy(
     )
 
 
-def _select_sources(request: AgentForgeRequest, family: AnswerFamily) -> list[EvidenceSource]:
+def _combined_family_policy(
+    family: AnswerFamily, secondary_families: tuple[AnswerFamily, ...]
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    required: list[str] = []
+    context: list[str] = []
+    record_types: list[str] = []
+    rubric: list[str] = []
+
+    for item in (family, *secondary_families):
+        item_required, item_context, item_record_types, item_rubric = _family_policy(item)
+        required.extend(item_required)
+        context.extend(item_context)
+        record_types.extend(item_record_types)
+        rubric.extend(item_rubric)
+
+    return (
+        tuple(dict.fromkeys(required)),
+        tuple(dict.fromkeys(context)),
+        tuple(dict.fromkeys(record_types)),
+        tuple(dict.fromkeys(rubric)),
+    )
+
+
+def _select_sources(
+    request: AgentForgeRequest, family: AnswerFamily, secondary_families: tuple[AnswerFamily, ...] = ()
+) -> list[EvidenceSource]:
+    selected: list[EvidenceSource] = []
+    for item in (family, *secondary_families):
+        for source in _select_sources_for_family(request, item):
+            if source.id not in {existing.id for existing in selected}:
+                selected.append(source)
+            if len(selected) >= 12:
+                return selected
+    return selected
+
+
+def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily) -> list[EvidenceSource]:
     sources = request.evidence_bundle.sources
     selected: list[EvidenceSource] = []
 

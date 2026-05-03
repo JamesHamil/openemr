@@ -11,7 +11,7 @@
 
 ## Checkpoint Status
 
-This submission checkpoint demonstrates the foundation for the committed Clinical Co-Pilot direction. The current work establishes the deployed OpenEMR surface, audit findings, target user, use cases, architecture plan, and first execution artifacts that guide the full project.
+This submission checkpoint demonstrates the foundation for the committed Clinical Co-Pilot direction. The current work establishes the deployed OpenEMR surface, final audit, target user, use cases, architecture plan, and first execution artifacts that guide the full project.
 
 The repository now includes the OpenEMR module shell, shared contracts, FastAPI sidecar, mock/real/off runtime modes, verifier, eval runner, and cost analysis. The Railway environment runs the sidecar in mock mode for deterministic demos; real OpenAI mode remains disabled unless server-side secrets and review-ready configuration are supplied.
 
@@ -19,15 +19,17 @@ The repository now includes the OpenEMR module shell, shared contracts, FastAPI 
 
 Public URL: https://openemr-production-5533.up.railway.app
 
-The Railway deployment is configured as separate OpenEMR, MariaDB, and AgentForge sidecar services. OpenEMR is built from this fork with `Dockerfile.railway`, and the sidecar is private-network only. The deployment is demo-only and is not production hardened. It must not be used with real PHI.
+The Railway deployment is configured as separate OpenEMR, MariaDB, and AgentForge sidecar services. OpenEMR is built from this fork with `Dockerfile.railway`, and the sidecar is private-network only. The deployment is a demo-data environment for the submission checkpoint, with production clinical use reserved for the compliance gate described in `AUDIT.md`.
 
-## Current Delivery Limits
+## Submission Guardrails
 
-- No real PHI may be used.
-- The deployment is not production HIPAA-ready.
-- The current OpenEMR deployment is intended for accessibility and demonstration, not clinical use.
-- Real OpenAI mode requires server-side `OPENAI_API_KEY` and review-ready sidecar configuration.
-- The first OpenEMR evidence collectors are narrow and read-only; full inpatient MAR/order/task coverage is not implemented.
+- Demo and synthetic patient data are the supported data classes for this checkpoint.
+- Production HIPAA readiness belongs to a separate institutional compliance gate.
+- The current OpenEMR deployment is intended for accessibility and demonstration.
+- Real OpenAI mode requires server-side `OPENAI_API_KEY` and reviewed sidecar configuration.
+- Module-to-sidecar requests require `AGENTFORGE_SIGNING_SECRET`; missing secrets fail closed.
+- Verification is bounded source-support and warning surfacing for clinician-reviewed demo-data decision support.
+- The first OpenEMR evidence collectors are narrow, read-only, and aligned to the rounding-brief use case.
 
 ## Implemented Execution Slice
 
@@ -36,3 +38,7 @@ The Railway deployment is configured as separate OpenEMR, MariaDB, and AgentForg
 - `agentforge/contracts/`: request and response JSON schemas.
 - `agentforge/evals/`: smoke eval dataset and runner.
 - `agentforge/COST_ANALYSIS.md`: AI cost and scale analysis.
+
+## Final Audit Coverage
+
+`AUDIT.md` now covers the five final-submission audit passes: security, performance, architecture, data quality, and compliance/regulatory readiness. The audit ties the implementation back to the OpenEMR trust boundary, signed short-lived evidence bundles, adapter-status warnings, PHI-safe traces, eval coverage, and compliance gates for real PHI.

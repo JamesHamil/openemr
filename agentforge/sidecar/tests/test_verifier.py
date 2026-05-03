@@ -135,6 +135,23 @@ class VerifierTest(unittest.TestCase):
         self.assertIn("give me a chart brief", verified.answer.lower())
         self.assertEqual(verified.claims, [])
 
+    def test_generic_source_cited_guidance_claim_is_blocked(self):
+        request = request_with_source("Pneumonia")
+        response = mock_response(request, "trace-test")
+        response.claims[0] = Claim(
+            id="claim-guidance",
+            text="Review current status and risk factors before clinical decisions.",
+            claim_type="guidance",
+            source_ids=["problem-1"],
+            support_status="supported",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.verification_status, "partial")
+        self.assertEqual(verified.blocked_claims, ["claim-guidance"])
+        self.assertEqual(verified.claims, [])
+
     def test_treatment_request_is_refused(self):
         request = request_with_source()
         request = request.model_copy(update={"message": "Should I start ceftriaxone?"})
@@ -182,26 +199,18 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(verified.verification_status, "verified")
         self.assertTrue(any(warning.code == "collector_unavailable" for warning in verified.warnings))
 
-    def test_negative_allergy_source_verifies_without_partial(self):
+    def test_missing_allergy_records_are_warning_not_source(self):
         request = request_with_sources(
             "What allergies do I need to know before ordering anything?",
-            [
-                EvidenceSource(
-                    id="allergy-none-123",
-                    record_type="allergy",
-                    recorded_at="2026-04-29T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    metadata={"status": "absent"},
-                )
-            ],
-            [AdapterStatus(adapter="allergies", status="success")],
+            [],
+            [AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found.")],
         )
         response, _trace = handle_chat(request, Settings(mode="mock"))
 
-        self.assertEqual(response.verification_status, "verified")
-        self.assertIn("No active allergies", response.answer)
-        self.assertEqual(response.sources[0].id, "allergy-none-123")
+        self.assertEqual(response.verification_status, "partial")
+        self.assertIn("No active allergy records", response.answer)
+        self.assertEqual(response.sources, [])
+        self.assertTrue(any(warning.code == "collector_unavailable" for warning in response.warnings))
 
     def test_lab_claim_can_be_verified(self):
         request = request_with_source(
@@ -483,14 +492,6 @@ class VerifierTest(unittest.TestCase):
             "What is missing that I need before making clinical decisions?",
             [
                 EvidenceSource(
-                    id="allergy-none-9",
-                    record_type="allergy",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    metadata={"status": "absent"},
-                ),
-                EvidenceSource(
                     id="problem-91",
                     record_type="problem",
                     recorded_at="2026-04-30T08:00:00Z",
@@ -500,7 +501,7 @@ class VerifierTest(unittest.TestCase):
             ],
             [
                 AdapterStatus(adapter="problem_list", status="success"),
-                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found."),
                 AdapterStatus(adapter="medications", status="unavailable", reason="No active meds found."),
                 AdapterStatus(adapter="vitals", status="unavailable", reason="No vitals found."),
                 AdapterStatus(adapter="labs", status="unavailable", reason="No labs found."),
@@ -523,13 +524,6 @@ class VerifierTest(unittest.TestCase):
                     support_status="supported",
                 ),
                 Claim(
-                    id="claim-allergy",
-                    text="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    claim_type="allergy",
-                    source_ids=["allergy-none-9"],
-                    support_status="supported",
-                ),
-                Claim(
                     id="claim-problem",
                     text="Problem list includes Diabetes.",
                     claim_type="problem",
@@ -538,14 +532,6 @@ class VerifierTest(unittest.TestCase):
                 ),
             ],
             sources=[
-                ResponseSource(
-                    id="allergy-none-9",
-                    record_type="allergy",
-                    display="Absent Allergy source",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                ),
                 ResponseSource(
                     id="problem-91",
                     record_type="problem",
@@ -586,19 +572,11 @@ class VerifierTest(unittest.TestCase):
                     field_path="prescriptions.drug",
                     value="Amlodipine / Hydrochlorothiazide / Olmesartan",
                 ),
-                EvidenceSource(
-                    id="allergy-none-5",
-                    record_type="allergy",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    metadata={"status": "absent"},
-                ),
             ],
             [
                 AdapterStatus(adapter="problem_list", status="success"),
                 AdapterStatus(adapter="medications", status="success"),
-                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found."),
                 AdapterStatus(adapter="recent_notes", status="unavailable", reason="No recent notes found."),
             ],
         )
@@ -624,13 +602,6 @@ class VerifierTest(unittest.TestCase):
                     source_ids=["medication-list-43"],
                     support_status="supported",
                 ),
-                Claim(
-                    id="c3",
-                    text="No active allergies are reported in retrieved OpenEMR allergy lists.",
-                    claim_type="allergy",
-                    source_ids=["allergy-none-5"],
-                    support_status="supported",
-                ),
             ],
             sources=[
                 ResponseSource(
@@ -648,14 +619,6 @@ class VerifierTest(unittest.TestCase):
                     recorded_at="2026-04-30T08:00:00Z",
                     field_path="prescriptions.drug",
                     extracted_value="Amlodipine / Hydrochlorothiazide / Olmesartan",
-                ),
-                ResponseSource(
-                    id="allergy-none-5",
-                    record_type="allergy",
-                    display="Absent Allergy source",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
                 ),
             ],
             warnings=[],
@@ -723,18 +686,10 @@ class VerifierTest(unittest.TestCase):
                     field_path="lists.title",
                     value="Amlodipine/Hydrochlorothiazide/Olmesartan",
                 ),
-                EvidenceSource(
-                    id="allergy-none-5",
-                    record_type="allergy",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    metadata={"status": "absent"},
-                ),
             ],
             [
                 AdapterStatus(adapter="problem_list", status="success"),
-                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found."),
                 AdapterStatus(adapter="medications", status="success"),
                 AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
             ],
@@ -768,13 +723,6 @@ class VerifierTest(unittest.TestCase):
                     source_ids=["medication-list-43"],
                     support_status="supported",
                 ),
-                Claim(
-                    id="claim-allergy",
-                    text="No active allergies reported in retrieved OpenEMR allergy lists.",
-                    claim_type="allergy",
-                    source_ids=["allergy-none-5"],
-                    support_status="supported",
-                ),
             ],
             sources=[
                 ResponseSource(
@@ -793,14 +741,6 @@ class VerifierTest(unittest.TestCase):
                     field_path="lists.title",
                     extracted_value="Amlodipine/Hydrochlorothiazide/Olmesartan",
                 ),
-                ResponseSource(
-                    id="allergy-none-5",
-                    record_type="allergy",
-                    display="Absent Allergy source",
-                    recorded_at="2026-04-30T08:00:00Z",
-                    field_path="lists.type=allergy",
-                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
-                ),
             ],
             warnings=[],
             blocked_claims=[],
@@ -811,8 +751,8 @@ class VerifierTest(unittest.TestCase):
         verified = verify_response(request, response)
 
         self.assertEqual(verified.answer, response.answer)
-        self.assertEqual(verified.blocked_claims, [])
-        self.assertIn("claim-sequence", [claim.id for claim in verified.claims])
+        self.assertEqual(verified.blocked_claims, ["claim-sequence"])
+        self.assertNotIn("claim-sequence", [claim.id for claim in verified.claims])
 
     def test_langfuse_metadata_mode_does_not_capture_phi_payloads(self):
         request = request_with_source("Pneumonia")

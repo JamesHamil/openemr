@@ -2,7 +2,7 @@
 
 ## Summary
 
-AgentForge Clinical Co-Pilot is a read-only, hospitalist-focused assistant embedded in OpenEMR. It helps a physician preparing for inpatient rounds generate a source-backed chart brief for the selected patient and ask patient-scoped follow-up questions. The product is not a broad medical chatbot and does not make or execute clinical decisions.
+AgentForge Clinical Co-Pilot is a read-only, hospitalist-focused assistant embedded in OpenEMR. It helps a physician preparing for inpatient rounds generate a source-backed chart brief for the selected patient and ask patient-scoped follow-up questions. The product is scoped to OpenEMR patient context, bounded evidence, and clinician-reviewed decision support.
 
 The project follows the direction established in `AUDIT.md`, `USERS.md`, and `ARCHITECTURE.md`: OpenEMR remains the clinical trust boundary, while an in-repo FastAPI sidecar handles LLM orchestration, structured responses, verification, evals, and PHI-safe operational traces.
 
@@ -17,12 +17,12 @@ The implementation remains demo-data-only until separate compliance gates are sa
   - Answer patient-scoped follow-up questions using bounded evidence.
   - Display citations, warnings, and verification status.
   - Refuse treatment directives and unauthorized or ungrounded requests.
-- Non-goals:
-  - No real PHI.
-  - No chart writes, orders, prescriptions, diagnoses, billing, or task creation.
-  - No broad multi-patient search.
-  - No standalone chatbot outside OpenEMR.
-  - No production HIPAA-readiness claim.
+- Product boundaries:
+  - Demo and synthetic patient data for the current checkpoint.
+  - Read-only chart synthesis.
+  - Single-patient OpenEMR context.
+  - Embedded OpenEMR workflow.
+  - Production HIPAA readiness through a separate compliance gate.
 
 ## Implementation Requirements
 
@@ -42,15 +42,16 @@ The implementation remains demo-data-only until separate compliance gates are sa
   - Live under `agentforge/contracts/`.
   - Define `agentforge.request.v1`, `agentforge.response.v1`, `RoundingContextBundle`, claims, sources, warnings, and response statuses.
 - Verification:
-  - Every factual clinical claim must cite source IDs plus supporting field paths, values, or note spans.
+  - Every factual clinical claim must cite source IDs plus supporting field paths, values, or note spans, except explicit missing-data claims supported by adapter status.
   - Unsupported claims are blocked, rewritten as uncertainty, or refused.
+  - General clinician confirm/review guidance may appear in prose or warnings, but is not treated as a verified factual claim unless directly source-supported.
   - Prompt injection inside chart text is treated as untrusted record content.
 - Observability:
   - OpenEMR records a patient-linked audit event with the sidecar trace ID.
   - Sidecar traces remain PHI-safe by default and include collector status, latency, mode, token/cost estimates, verification status, blocked claims, and error state.
 - Deployment:
   - Railway runs OpenEMR, MariaDB, and the sidecar as separate services from the same fork.
-  - Server-side configuration includes sidecar URL, signing secret, OpenAI API key, model config, and `AGENTFORGE_MODE`.
+  - Server-side configuration includes sidecar URL, required signing secret, OpenAI API key, model config, and `AGENTFORGE_MODE`.
   - Rollback is disabling the module or switching `AGENTFORGE_MODE=off` or `mock`.
 
 ## Acceptance Criteria
@@ -65,6 +66,7 @@ The implementation remains demo-data-only until separate compliance gates are sa
 - The verifier blocks unsupported claims and treatment directives.
 - Eval smoke tests cover happy path, missing data, conflicting data, unsupported citation, unauthorized patient, collector failure, unsafe treatment request, and prompt injection.
 - OpenEMR remains usable when the sidecar is unavailable.
+- `AUDIT.md` covers the security, performance, architecture, data quality, and compliance/regulatory audit passes for the final submission.
 
 ## Delivery Artifacts
 
