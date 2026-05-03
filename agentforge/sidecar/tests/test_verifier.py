@@ -568,6 +568,143 @@ class VerifierTest(unittest.TestCase):
         self.assertEqual(verified.blocked_claims, [])
         self.assertIn("claim-gap", [claim.id for claim in verified.claims])
 
+    def test_phantom_blocked_claim_id_is_ignored(self):
+        request = request_with_sources(
+            "Give me a chart brief for rounds.",
+            [
+                EvidenceSource(
+                    id="problem-50",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Hypertension",
+                ),
+                EvidenceSource(
+                    id="medication-list-43",
+                    record_type="medication",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="prescriptions.drug",
+                    value="Amlodipine / Hydrochlorothiazide / Olmesartan",
+                ),
+                EvidenceSource(
+                    id="allergy-none-5",
+                    record_type="allergy",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                    metadata={"status": "absent"},
+                ),
+            ],
+            [
+                AdapterStatus(adapter="problem_list", status="success"),
+                AdapterStatus(adapter="medications", status="success"),
+                AdapterStatus(adapter="allergies", status="success"),
+                AdapterStatus(adapter="recent_notes", status="unavailable", reason="No recent notes found."),
+            ],
+        )
+        answer = (
+            "The chart shows hypertension, current antihypertensive therapy, and no active allergies "
+            "in the retrieved allergy list."
+        )
+        response = AgentForgeResponse(
+            answer=answer,
+            sections=[],
+            claims=[
+                Claim(
+                    id="c1",
+                    text="The chart shows hypertension.",
+                    claim_type="problem",
+                    source_ids=["problem-50"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="c2",
+                    text="Current medications include Amlodipine / Hydrochlorothiazide / Olmesartan.",
+                    claim_type="medication",
+                    source_ids=["medication-list-43"],
+                    support_status="supported",
+                ),
+                Claim(
+                    id="c3",
+                    text="No active allergies are reported in retrieved OpenEMR allergy lists.",
+                    claim_type="allergy",
+                    source_ids=["allergy-none-5"],
+                    support_status="supported",
+                ),
+            ],
+            sources=[
+                ResponseSource(
+                    id="problem-50",
+                    record_type="problem",
+                    display="Problem source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Hypertension",
+                ),
+                ResponseSource(
+                    id="medication-list-43",
+                    record_type="medication",
+                    display="Medication source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="prescriptions.drug",
+                    extracted_value="Amlodipine / Hydrochlorothiazide / Olmesartan",
+                ),
+                ResponseSource(
+                    id="allergy-none-5",
+                    record_type="allergy",
+                    display="Absent Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.type=allergy",
+                    extracted_value="No active allergies reported in retrieved OpenEMR allergy lists.",
+                ),
+            ],
+            warnings=[],
+            blocked_claims=["c6"],
+            verification_status="verified",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.answer, answer)
+        self.assertEqual(verified.blocked_claims, [])
+        self.assertEqual(verified.verification_status, "partial")
+
+    def test_missing_data_all_blocked_falls_back_to_adapter_names(self):
+        request = request_with_sources(
+            "What is missing that I need before making clinical decisions?",
+            [],
+            [
+                AdapterStatus(adapter="labs", status="unavailable", reason="No labs found."),
+                AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
+            ],
+        )
+        response = AgentForgeResponse(
+            answer="Unsupported missing-data draft.",
+            sections=[],
+            claims=[
+                Claim(
+                    id="claim-unsupported",
+                    text="The retrieved source includes a recent A1c.",
+                    claim_type="lab",
+                    source_ids=["lab-missing"],
+                    support_status="supported",
+                )
+            ],
+            sources=[],
+            warnings=[],
+            blocked_claims=[],
+            verification_status="partial",
+            trace_id="trace-test",
+        )
+
+        verified = verify_response(request, response)
+
+        self.assertEqual(verified.verification_status, "partial")
+        self.assertIn("labs", verified.answer)
+        self.assertIn("recent notes", verified.answer)
+        self.assertIn("confirm in chart", verified.answer)
+
     def test_first_room_guidance_answer_is_not_rewritten_to_source_inventory(self):
         request = request_with_sources(
             "What should I ask the patient first when I enter the room?",

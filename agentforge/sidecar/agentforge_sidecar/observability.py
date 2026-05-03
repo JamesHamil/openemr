@@ -145,6 +145,9 @@ def update_chat_observation(
             "verifier_result": trace.verifier_result or "",
             "repair_count": trace.repair_count,
             "status_reason": trace.status_reason or "",
+            "source_selection_mode": trace.source_selection_mode or "",
+            "stale_blocked_claim_count": trace.stale_blocked_claim_count,
+            "valid_blocked_claim_count": trace.valid_blocked_claim_count,
             "error": trace.error,
         },
     )

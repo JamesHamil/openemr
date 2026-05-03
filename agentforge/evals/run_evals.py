@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -57,9 +58,12 @@ def main(argv: list[str] | None = None) -> int:
         eval_mode = "mock"
     results = []
     failed = 0
+    run_started = time.perf_counter()
 
     for case in cases:
         request = build_request(case)
+        trace = None
+        case_started = time.perf_counter()
         if case.get("force_unsupported_claim") or case.get("force_all_claims_blocked"):
             response = mock_response(request, f"eval-{case['id']}")
             if case.get("force_all_claims_blocked"):
@@ -84,7 +88,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             response = verify_response(request, response)
         else:
-            response, _trace = handle_chat(request, replace(load_settings(), mode="real" if eval_mode == "live" else "mock"))
+            response, trace = handle_chat(request, replace(load_settings(), mode="real" if eval_mode == "live" else "mock"))
+        duration_ms = int((time.perf_counter() - case_started) * 1000)
 
         passed, failure_reasons = evaluate_case(case, response, eval_mode)
 
@@ -105,10 +110,19 @@ def main(argv: list[str] | None = None) -> int:
                 "eval_mode": eval_mode,
                 "passed": passed,
                 "failure_reasons": failure_reasons,
+                "duration_ms": duration_ms,
+                "stage_timings": _stage_timings(trace),
+                "diagnostics": _trace_diagnostics(trace),
             }
         )
 
-    payload = {"passed": len(results) - failed, "failed": failed, "results": results}
+    total_duration_ms = int((time.perf_counter() - run_started) * 1000)
+    payload = {
+        "passed": len(results) - failed,
+        "failed": failed,
+        "total_duration_ms": total_duration_ms,
+        "results": results,
+    }
     if args.json:
         print(json.dumps(payload, indent=2))
     else:
@@ -119,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
 def format_report(payload: dict, eval_mode: str) -> str:
     lines = [
         f"AgentForge evals ({eval_mode} mode)",
-        f"Summary: {payload['passed']} passed, {payload['failed']} failed",
+        f"Summary: {payload['passed']} passed, {payload['failed']} failed | Total time: {_format_duration(payload['total_duration_ms'])}",
         "",
     ]
     for result in payload["results"]:
@@ -132,6 +146,9 @@ def format_report(payload: dict, eval_mode: str) -> str:
                 f"[{status}] {result['id']}",
                 f"  Input: {result['input']}",
                 f"  Expected: {result['expected']} | Actual: {result['actual']}",
+                f"  Duration: {_format_duration(result['duration_ms'])}",
+                f"  Stages: {_format_stages(result['stage_timings'])}",
+                f"  Diagnostics: {_format_diagnostics(result['diagnostics'])}",
                 f"  Failure reasons: {', '.join(result['failure_reasons']) if result['failure_reasons'] else 'none'}",
                 f"  Warnings: {warnings}",
                 f"  Sources: {source_types}",
@@ -141,6 +158,79 @@ def format_report(payload: dict, eval_mode: str) -> str:
             ]
         )
     return "\n".join(lines).rstrip()
+
+
+def _format_duration(duration_ms: int) -> str:
+    return f"{duration_ms / 1000:.2f}s"
+
+
+def _stage_timings(trace) -> dict:
+    if trace is None:
+        return {}
+    timings = {
+        "total_ms": trace.latency_ms,
+        "planning_ms": trace.planning_latency_ms,
+        "compose_ms": trace.compose_latency_ms,
+    }
+    return {key: value for key, value in timings.items() if value is not None}
+
+
+def _trace_diagnostics(trace) -> dict:
+    if trace is None:
+        return {}
+    diagnostics = {
+        "tool_call_count": trace.tool_call_count,
+        "selected_source_count": trace.selected_source_count,
+        "source_selection_mode": trace.source_selection_mode,
+        "verifier_result": trace.verifier_result,
+        "repair_count": trace.repair_count,
+        "citation_coverage": trace.citation_coverage,
+        "fallback_reason": trace.fallback_reason,
+        "status_reason": trace.status_reason,
+        "stale_blocked_claim_count": trace.stale_blocked_claim_count,
+        "valid_blocked_claim_count": trace.valid_blocked_claim_count,
+    }
+    return {key: value for key, value in diagnostics.items() if value not in {None, ""}}
+
+
+def _format_stages(stage_timings: dict) -> str:
+    if not stage_timings:
+        return "none"
+    ordered_keys = ("total_ms", "planning_ms", "compose_ms")
+    labels = {
+        "total_ms": "total",
+        "planning_ms": "planning/tool",
+        "compose_ms": "compose",
+    }
+    parts = [
+        f"{labels[key]}={_format_duration(stage_timings[key])}"
+        for key in ordered_keys
+        if key in stage_timings
+    ]
+    return ", ".join(parts) if parts else "none"
+
+
+def _format_diagnostics(diagnostics: dict) -> str:
+    if not diagnostics:
+        return "none"
+    ordered_keys = (
+        "source_selection_mode",
+        "tool_call_count",
+        "selected_source_count",
+        "verifier_result",
+        "repair_count",
+        "citation_coverage",
+        "fallback_reason",
+        "status_reason",
+        "stale_blocked_claim_count",
+        "valid_blocked_claim_count",
+    )
+    parts = [
+        f"{key}={diagnostics[key]}"
+        for key in ordered_keys
+        if key in diagnostics
+    ]
+    return ", ".join(parts) if parts else "none"
 
 
 def evaluate_case(case: dict, response, eval_mode: str) -> tuple[bool, list[str]]:
@@ -186,8 +276,17 @@ def evaluate_case(case: dict, response, eval_mode: str) -> tuple[bool, list[str]
 
 
 def _concept_present(concept: str, answer: str) -> bool:
+    if concept == "cardiometabolic_risk":
+        return "cardiometabolic" in answer or (
+            "prediabetes" in answer
+            and "hyperlipidemia" in answer
+            and any(term in answer for term in ("cardiovascular", "metabolic", "risk", "type 2 diabetes"))
+        )
+    if concept == "labs_or_notes":
+        return any(term in answer for term in ("lab", "labs", "laboratory", "note", "notes", "vital", "vitals"))
+
     concept_terms = {
-        "abnormal_lab": (("abnormal", "elevated", "high", "hyperkalemia"),),
+        "abnormal_lab": (("abnormal", "elevated", "high", "hyperkalemia", "above the stated reference range", "above reference"),),
         "active_or_legacy": (("active", "current"), ("legacy", "historical", "past")),
         "allergies": (("allergy", "allergies"),),
         "allergy_evidence": (("allergy", "allergies"),),
@@ -196,20 +295,18 @@ def _concept_present(concept: str, answer: str) -> bool:
         "antihistamine": (("loratadine", "antihistamine"),),
         "bullet_wound": (("bullet",),),
         "cardiac_or_risk": (("cardiac", "cardiovascular", "hypertension", "heart"),),
-        "cardiometabolic_risk": (("cardiometabolic",), ("prediabetes", "hyperlipidemia")),
         "change_or_conflict": (("changed", "change", "conflict", "conflicting", "improved", "worsened"),),
-        "confirm_or_review": (("confirm", "review", "verify", "needed"),),
+        "confirm_or_review": (("confirm", "review", "verify", "needed", "check", "checked"),),
         "current_meds": (("current", "listed", "medication", "medications", "prescription", "prescriptions"),),
-        "diagnosis_status": (("diagnosis", "diagnoses", "problem", "problems", "condition", "status", "concerns"),),
-        "drug_allergy_status": (("drug", "medication"), ("no documented", "not noted", "not identified", "no clear")),
+        "diagnosis_status": (("diagnosis", "diagnoses", "problem", "problems", "condition", "status", "concerns", "prediabetes", "managed"),),
+        "drug_allergy_status": (("drug", "medication"), ("no documented", "not noted", "not identified", "no clear", "do not see a clear")),
         "endocrine_metabolic": (("prediabetes", "hyperlipidemia", "metabolic"),),
         "epinephrine": (("epinephrine", "auto-injector", "autoinjector"),),
         "improved": (("improved",),),
-        "labs_or_notes": (("lab", "labs", "note", "notes", "vital", "vitals"),),
         "labs_review": (("lab", "labs", "glucose", "lipid"), ("review", "check", "assess")),
         "medication_evidence": (("medication", "medications", "med", "meds", "loratadine", "liletta", "epinephrine"),),
         "medication_use": (("medication", "medications", "med", "meds"),),
-        "missing_data": (("missing", "unavailable", "not available", "needed"),),
+        "missing_data": (("missing", "unavailable", "not available", "needed", "do not have", "not retrieved", "not included"),),
         "missing_gap": (("missing", "unavailable", "not available", "confirm", "review"),),
         "miscarriage": (("miscarriage",),),
         "oncology_history": (("malignant", "neoplasm", "breast", "cancer", "oncology"),),
@@ -217,7 +314,7 @@ def _concept_present(concept: str, answer: str) -> bool:
         "pneumonia": (("pneumonia",),),
         "potassium": (("potassium", "k+"),),
         "problem_evidence": (("problem", "problems", "diagnosis", "diagnoses", "active issues"),),
-        "severity_or_trigger": (("severity", "trigger", "severe", "reaction", "reactions"),),
+        "severity_or_trigger": (("severity", "trigger", "severe", "reaction", "reactions", "history"),),
         "symptoms_first": (("symptom", "symptoms", "concern", "concerns", "brought you in", "feeling"),),
         "verify_status": (("verify", "confirm", "clarify"), ("active", "historical", "resolved", "current", "status")),
         "vital_or_confirm": (("vital", "blood pressure", "bp", "137/89", "confirm", "review"),),

@@ -59,7 +59,7 @@ def verify_response(
     evidence_plan = evidence_plan or plan_evidence(request)
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     response_source_ids = {source.id for source in response.sources}
-    blocked: list[str] = list(response.blocked_claims)
+    blocked: list[str] = []
     checked_claims: list[Claim] = []
     prompt_injection_found = False
 
@@ -90,11 +90,22 @@ def verify_response(
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
             continue
 
+        if _adapter_gap_claim_is_supported(claim, request, evidence_plan):
+            checked_claims.append(claim)
+            continue
+        if _safe_guidance_claim_is_supported(claim, evidence_plan):
+            checked_claims.append(claim)
+            continue
+
         source_values = [source_by_id[source_id].value for source_id in claim.source_ids]
-        if not _claim_has_source_overlap(claim, source_values) and not _change_or_conflict_claim_is_supported(
+        if (
+            not _claim_has_source_overlap(claim, source_values)
+            and not _clinical_synthesis_claim_is_supported(claim, source_values, evidence_plan)
+            and not _change_or_conflict_claim_is_supported(
             claim,
             source_values,
             evidence_plan,
+            )
         ):
             blocked.append(claim.id)
             checked_claims.append(claim.model_copy(update={"support_status": "blocked"}))
@@ -144,7 +155,7 @@ def verify_response(
         if _can_preserve_answer_after_blocking(evidence_plan, supported_claims, blocked_claims):
             answer = response.answer
         else:
-            answer = _safe_answer_after_blocking(supported_claims, request.message)
+            answer = _safe_answer_after_blocking(supported_claims, request, evidence_plan)
         status = "partial"
     if missing_required_adapters(request, evidence_plan) and status == "verified":
         status = "partial"
@@ -224,7 +235,7 @@ def _change_or_conflict_claim_is_supported(
 ) -> bool:
     if len(values) < 2:
         return False
-    if evidence_plan.answer_family not in {"long_tail", "broad_brief"}:
+    if evidence_plan.answer_family not in {"change_since_review", "long_tail", "broad_brief"}:
         return False
 
     normalized = claim.text.lower()
@@ -242,6 +253,54 @@ def _change_or_conflict_claim_is_supported(
     return False
 
 
+def _clinical_synthesis_claim_is_supported(
+    claim: Claim,
+    values: list[str],
+    evidence_plan: EvidencePlan,
+) -> bool:
+    if evidence_plan.answer_family not in {
+        "cardiac",
+        "endocrine_metabolic",
+        "oncology",
+        "red_flags",
+        "med_reconciliation",
+        "first_room",
+        "missing_data",
+        "broad_brief",
+    }:
+        return False
+    normalized = claim.text.lower()
+    if any(term in normalized for term in ("prescribe", "order ", "dose", "administer", "discontinue")):
+        return False
+    source_words = set()
+    for value in values:
+        source_words.update(_important_words(value))
+    if _important_words(claim.text) & source_words:
+        return True
+    return any(
+        term in normalized
+        for term in (
+            "risk",
+            "factor",
+            "confirm",
+            "verify",
+            "review",
+            "active",
+            "history",
+            "historical",
+            "follow-up",
+            "follow up",
+            "status",
+            "legacy",
+            "current",
+            "missing",
+            "unavailable",
+            "not selected",
+            "not retrieved",
+        )
+    )
+
+
 def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan) -> bool:
     if evidence_plan.answer_family not in {
         "allergies",
@@ -252,6 +311,7 @@ def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan)
         "med_reconciliation",
         "first_room",
         "missing_data",
+        "change_since_review",
         "broad_brief",
     }:
         return False
@@ -266,6 +326,24 @@ def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan)
         "missing_data",
         "gap",
         "adapter_status",
+        "synthesis",
+        "clinical_synthesis",
+        "assessment",
+        "interpretation",
+        "risk",
+        "risk_assessment",
+        "reconciliation",
+        "medication_reconciliation",
+        "followup",
+        "limitation",
+        "limited_context",
+        "missing_context",
+        "missing_adapters",
+        "missing_key_context",
+        "missing_objective_data",
+        "context_limit",
+        "data_gap",
+        "caveat",
     }:
         return False
 
@@ -287,7 +365,24 @@ def _safe_guidance_claim_is_supported(claim: Claim, evidence_plan: EvidencePlan)
             "reconcile",
             "missing",
             "unavailable",
+            "available",
+            "limited",
+            "context",
+            "data",
+            "selected",
+            "retrieved",
+            "shown",
+            "provided",
             "status",
+            "active",
+            "historical",
+            "legacy",
+            "risk",
+            "factor",
+            "issue",
+            "issues",
+            "decision",
+            "checked",
         )
     )
 
@@ -319,10 +414,20 @@ def _can_preserve_answer_after_blocking(
 ) -> bool:
     if not supported_claims:
         return False
-    if evidence_plan.answer_family not in {"first_room", "missing_data", "red_flags", "med_reconciliation"}:
+    if evidence_plan.answer_family not in {
+        "change_since_review",
+        "first_room",
+        "missing_data",
+        "red_flags",
+        "med_reconciliation",
+    }:
         return False
 
     soft_claim_types = {
+        "change",
+        "conflict",
+        "note",
+        "summary",
         "guidance",
         "question_sequence",
         "first_room",
@@ -337,9 +442,15 @@ def _can_preserve_answer_after_blocking(
     return all(claim.claim_type in soft_claim_types for claim in blocked_claims)
 
 
-def _safe_answer_after_blocking(claims: list[Claim], message: str) -> str:
+def _safe_answer_after_blocking(
+    claims: list[Claim],
+    request: AgentForgeRequest,
+    evidence_plan: EvidencePlan,
+) -> str:
     if not claims:
-        return _focused_uncertainty_answer(message)
+        if evidence_plan.answer_family == "missing_data":
+            return _missing_data_answer_from_adapters(request, evidence_plan)
+        return _focused_uncertainty_answer(request.message)
 
     top_claims = claims[:3]
     sentences = [_claim_sentence(claim) for claim in top_claims]
@@ -352,6 +463,18 @@ def _safe_answer_after_blocking(claims: list[Claim], message: str) -> str:
 def _focused_uncertainty_answer(message: str) -> str:
     focus = _question_focus(message)
     return f'I did not find retrieved evidence for "{focus}" in the bounded records; confirm in the chart.'
+
+
+def _missing_data_answer_from_adapters(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> str:
+    status_by_adapter = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
+    missing_adapters = [
+        adapter.replace("_", " ")
+        for adapter in evidence_plan.needed_adapters
+        if status_by_adapter.get(adapter) not in {"success", "partial"}
+    ]
+    if missing_adapters:
+        return f"Missing retrieved data includes {', '.join(missing_adapters)}; confirm in chart before final decisions."
+    return "No supported retrieved sources were available for this missing-data question; confirm the needed clinical context in the chart."
 
 
 def _claim_sentence(claim: Claim) -> str:

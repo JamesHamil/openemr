@@ -1,11 +1,16 @@
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from agentforge_sidecar.clinical_planner import plan_evidence
 from agentforge_sidecar.openai_provider import (
     ModelAgentForgeResponse,
+    ModelResponseSource,
     ModelVerificationResult,
+    _fallback_answer_for_plan,
     _limit_response,
     _model_verify_and_repair,
+    openai_response,
 )
 from agentforge_sidecar.schemas import (
     AdapterStatus,
@@ -125,6 +130,61 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual([claim.id for claim in limited.claims], ["claim-1", "claim-2"])
         self.assertEqual([source.id for source in limited.sources], ["allergy-1"])
 
+    def test_limit_response_drops_stale_blocked_claim_ids(self):
+        request = _request()
+        response = _response().model_copy(update={"blocked_claims": ["claim-2", "claim-ghost"]})
+        limited = _limit_response(response, request.evidence_bundle.sources)
+
+        self.assertEqual(limited.blocked_claims, ["claim-2"])
+
+    def test_openai_response_skips_model_tool_phase_when_planner_selected_sources(self):
+        request = _request()
+        composed = ModelAgentForgeResponse(
+            answer="Documented allergies include eggs. [allergy-1]",
+            claims=[
+                Claim(
+                    id="claim-1",
+                    text="Documented allergies include Allergy to eggs.",
+                    claim_type="allergy",
+                    source_ids=["allergy-1"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ModelResponseSource(
+                    id="allergy-1",
+                    record_type="allergy",
+                    display="Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Allergy to eggs",
+                )
+            ],
+            verification_status="verified",
+            trace_id="trace-test",
+        )
+        client = _FakeClient(
+            [
+                composed,
+                ModelVerificationResult(
+                    result="passed",
+                    status_recommendation="verified",
+                    citation_coverage=1.0,
+                ),
+            ]
+        )
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.source_selection_mode, "planner")
+        self.assertEqual(diagnostics.tool_call_count, 0)
+        self.assertEqual(diagnostics.planning_latency_ms, 0)
+
     def test_model_verifier_repair_loop_returns_repaired_response(self):
         request = _request()
         repaired = _response("Documented allergies: eggs; verify reaction severity. [allergy-1]")
@@ -154,6 +214,25 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(response.answer, repaired.answer)
         self.assertEqual(metadata.repair_count, 1)
         self.assertEqual(metadata.status_reason, "model_verifier_repaired")
+
+    def test_missing_data_empty_selection_fallback_names_unavailable_adapters(self):
+        request = _request().model_copy(update={"message": "What is missing that I need before making clinical decisions?"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [],
+                "adapter_status": [
+                    AdapterStatus(adapter="labs", status="unavailable", reason="No labs found."),
+                    AdapterStatus(adapter="recent_notes", status="unavailable", reason="No notes found."),
+                ],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+
+        answer = _fallback_answer_for_plan(request, plan_evidence(request))
+
+        self.assertIn("labs", answer)
+        self.assertIn("recent notes", answer)
+        self.assertIn("confirm in chart", answer)
 
 
 if __name__ == "__main__":

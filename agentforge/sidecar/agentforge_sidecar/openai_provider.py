@@ -12,11 +12,13 @@ from .observability import generation_observation, update_generation_observation
 from .schemas import (
     AgentForgeRequest,
     AgentForgeResponse,
+    ClaimDraft,
     Claim,
     EvidenceSource,
     ResponseSection,
     ResponseSource,
     StrictModel,
+    ToolPhaseResult,
     WarningItem,
 )
 from .settings import Settings
@@ -41,6 +43,9 @@ For broad chart-summary requests, include sections with scannable claims.
 For first-room questions, start with today's symptoms or the patient's main concern, then add chart-specific follow-ups.
 For cardiac questions, separate explicit cardiac diagnoses from risk-related conditions and cite vitals when selected.
 For missing-data questions, name missing data first, then cite any available context second.
+For change-since-review questions, compare selected notes directly and preserve direction/timing language.
+For red-flag questions, mention each selected problem-list item that may need active-vs-historical verification.
+For first-room questions, explicitly ask about current medication use.
 Use answer for the top-line response and claims/sections for supporting details.
 Return only sources that are cited by claims. Keep each extracted_value short.
 Say evidence was not found in retrieved records rather than absent from reality."""
@@ -105,6 +110,9 @@ class ProviderDiagnostics:
     verifier_result: str = ""
     repair_count: int = 0
     status_reason: str = ""
+    source_selection_mode: str = ""
+    stale_blocked_claim_count: int = 0
+    valid_blocked_claim_count: int = 0
 
 
 def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
@@ -123,38 +131,46 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
         )
     try:
         client = OpenAI()
-        with generation_observation(
-            "agentforge.tool_phase",
-            settings,
-            model,
-            {
-                "message": request.message,
-                "source_count": len(request.evidence_bundle.sources),
-                "adapter_statuses": [status.model_dump() for status in request.evidence_bundle.adapter_status],
-                "answer_family": evidence_plan.answer_family,
-                "planner_selected_source_ids": list(evidence_plan.selected_source_ids),
-            },
-        ) as tool_observation:
-            tool_plan, tool_diag = run_tool_phase(client, request, model)
-            selected_source_ids = _merge_source_ids(evidence_plan.selected_source_ids, tool_plan.selected_source_ids)
-            update_generation_observation(
-                tool_observation,
+        source_selection_mode = "planner" if evidence_plan.selected_source_ids else "model_tool_phase"
+        if source_selection_mode == "planner":
+            tool_plan = _planner_tool_phase_result(request, evidence_plan)
+            tool_diag = ToolPhaseDiagnostics()
+            selected_source_ids = list(evidence_plan.selected_source_ids)
+        else:
+            with generation_observation(
+                "agentforge.tool_phase",
                 settings,
+                model,
                 {
-                    "selected_source_ids": selected_source_ids,
-                    "selected_source_count": len(selected_source_ids),
-                    "drafted_claim_count": len(tool_plan.drafted_claims),
-                    "focus": tool_plan.focus,
+                    "message": request.message,
+                    "source_count": len(request.evidence_bundle.sources),
+                    "adapter_statuses": [status.model_dump() for status in request.evidence_bundle.adapter_status],
                     "answer_family": evidence_plan.answer_family,
+                    "planner_selected_source_ids": list(evidence_plan.selected_source_ids),
                 },
-                metadata={
-                    "tool_call_count": tool_diag.tool_call_count,
-                    "planning_latency_ms": tool_diag.planning_latency_ms,
-                    "fallback_reason": tool_diag.fallback_reason,
-                    "invalid_source_id_count": tool_diag.invalid_source_id_count,
-                    "needed_adapters": ",".join(evidence_plan.needed_adapters),
-                },
-            )
+            ) as tool_observation:
+                tool_plan, tool_diag = run_tool_phase(client, request, model)
+                selected_source_ids = _merge_source_ids(evidence_plan.selected_source_ids, tool_plan.selected_source_ids)
+                update_generation_observation(
+                    tool_observation,
+                    settings,
+                    {
+                        "selected_source_ids": selected_source_ids,
+                        "selected_source_count": len(selected_source_ids),
+                        "drafted_claim_count": len(tool_plan.drafted_claims),
+                        "focus": tool_plan.focus,
+                        "answer_family": evidence_plan.answer_family,
+                        "source_selection_mode": source_selection_mode,
+                    },
+                    metadata={
+                        "tool_call_count": tool_diag.tool_call_count,
+                        "planning_latency_ms": tool_diag.planning_latency_ms,
+                        "fallback_reason": tool_diag.fallback_reason,
+                        "invalid_source_id_count": tool_diag.invalid_source_id_count,
+                        "needed_adapters": ",".join(evidence_plan.needed_adapters),
+                        "source_selection_mode": source_selection_mode,
+                    },
+                )
         selected_sources = _selected_sources(request, selected_source_ids)
         if not selected_sources:
             warnings = []
@@ -166,7 +182,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 )
             )
             response = AgentForgeResponse(
-                answer=_focused_uncertainty_answer(request.message),
+                answer=_fallback_answer_for_plan(request, evidence_plan),
                 sections=[],
                 claims=[],
                 sources=[],
@@ -184,6 +200,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 answer_family=evidence_plan.answer_family,
                 needed_adapters=evidence_plan.needed_adapters,
                 status_reason=reason,
+                source_selection_mode=source_selection_mode,
             )
             return response, diagnostics
 
@@ -231,18 +248,27 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
             parsed_response = _model_response_to_agent_response(parsed, trace_id)
             compose_latency_ms = int((time.perf_counter() - compose_started) * 1000)
+            normalized = _limit_response(parsed_response, selected_sources)
+            stale_blocked_claim_count = _stale_blocked_claim_count(parsed_response, normalized)
+            valid_blocked_claim_count = len(normalized.blocked_claims)
             update_generation_observation(
                 compose_observation,
                 settings,
                 {
-                    "verification_status": parsed_response.verification_status,
-                    "claim_count": len(parsed_response.claims),
-                    "source_count": len(parsed_response.sources),
-                    "answer": parsed_response.answer,
+                    "verification_status": normalized.verification_status,
+                    "claim_count": len(normalized.claims),
+                    "source_count": len(normalized.sources),
+                    "answer": normalized.answer,
+                    "stale_blocked_claim_count": stale_blocked_claim_count,
+                    "valid_blocked_claim_count": valid_blocked_claim_count,
                 },
-                metadata={"compose_latency_ms": compose_latency_ms},
+                metadata={
+                    "compose_latency_ms": compose_latency_ms,
+                    "source_selection_mode": source_selection_mode,
+                    "stale_blocked_claim_count": stale_blocked_claim_count,
+                    "valid_blocked_claim_count": valid_blocked_claim_count,
+                },
             )
-        normalized = _limit_response(parsed_response, selected_sources)
         normalized, verification_metadata = _model_verify_and_repair(
             client=client,
             model=model,
@@ -277,6 +303,9 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             verifier_result=verification_metadata.result,
             repair_count=verification_metadata.repair_count,
             status_reason=verification_metadata.status_reason,
+            source_selection_mode=source_selection_mode,
+            stale_blocked_claim_count=stale_blocked_claim_count,
+            valid_blocked_claim_count=valid_blocked_claim_count,
         )
         return normalized, diagnostics
     except Exception:  # pragma: no cover - runtime/model-path safeguard
@@ -296,6 +325,38 @@ class VerificationMetadata:
     citation_coverage: float | None = None
     repair_count: int = 0
     status_reason: str = ""
+
+
+def _planner_tool_phase_result(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> ToolPhaseResult:
+    source_by_id = {source.id: source for source in request.evidence_bundle.sources}
+    selected_sources = [
+        source_by_id[source_id]
+        for source_id in evidence_plan.selected_source_ids
+        if source_id in source_by_id
+    ][:8]
+    return ToolPhaseResult(
+        selected_source_ids=list(evidence_plan.selected_source_ids),
+        drafted_claims=[
+            ClaimDraft(
+                text=_draft_claim_text(source),
+                claim_type=source.record_type,
+                source_ids=[source.id],
+            )
+            for source in selected_sources
+        ],
+        focus=_planner_focus(evidence_plan),
+    )
+
+
+def _draft_claim_text(source: EvidenceSource) -> str:
+    record_type = source.record_type.replace("_", " ")
+    return f"Retrieved {record_type} evidence: {source.value}."
+
+
+def _planner_focus(evidence_plan: EvidencePlan) -> str:
+    if evidence_plan.rubric:
+        return " ".join(evidence_plan.rubric[:2])
+    return "Deterministic evidence planner selected relevant sources."
 
 
 def _limit_response(response: AgentForgeResponse, selected_sources: list[EvidenceSource]) -> AgentForgeResponse:
@@ -327,14 +388,52 @@ def _limit_response(response: AgentForgeResponse, selected_sources: list[Evidenc
         claim_ids = [claim_id for claim_id in section.claim_ids if claim_id in kept_claim_ids]
         if claim_ids:
             sections.append(section.model_copy(update={"claim_ids": claim_ids}))
+    if not sections and len(kept_claims) >= 3:
+        sections = _sections_from_claims(kept_claims)
+
+    blocked_claims = []
+    for claim_id in response.blocked_claims:
+        if claim_id in kept_claim_ids and claim_id not in blocked_claims:
+            blocked_claims.append(claim_id)
 
     return response.model_copy(
         update={
             "claims": kept_claims,
             "sections": sections,
             "sources": response_sources,
+            "blocked_claims": blocked_claims,
         }
     )
+
+
+def _stale_blocked_claim_count(original: AgentForgeResponse, limited: AgentForgeResponse) -> int:
+    retained_claim_ids = {claim.id for claim in limited.claims}
+    return sum(1 for claim_id in set(original.blocked_claims) if claim_id not in retained_claim_ids)
+
+
+def _sections_from_claims(claims: list[Claim]) -> list[ResponseSection]:
+    sections: list[ResponseSection] = []
+    for claim in claims:
+        section_id = _section_id_for_claim_type(claim.claim_type)
+        existing = next((section for section in sections if section.id == section_id), None)
+        if existing:
+            existing.claim_ids.append(claim.id)
+            continue
+        sections.append(
+            ResponseSection(
+                id=section_id,
+                title=claim.claim_type.replace("_", " ").title(),
+                claim_ids=[claim.id],
+            )
+        )
+        if len(sections) >= 6:
+            break
+    return sections
+
+
+def _section_id_for_claim_type(claim_type: str) -> str:
+    normalized = "".join(character if character.isalnum() else "-" for character in claim_type.lower()).strip("-")
+    return normalized or "evidence"
 
 
 def _model_verify_and_repair(
@@ -585,6 +684,24 @@ def _focused_uncertainty_answer(message: str) -> str:
     return f'I did not find retrieved evidence for "{focus}" in the bounded records; confirm in the chart.'
 
 
+def _fallback_answer_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> str:
+    if evidence_plan.answer_family == "missing_data":
+        missing = _unavailable_adapter_names(request, evidence_plan)
+        if missing:
+            return f"Missing retrieved data includes {', '.join(missing)}; confirm in chart before final decisions."
+        return "No selected sources were available for this missing-data question; confirm the needed clinical context in the chart."
+    return _focused_uncertainty_answer(request.message)
+
+
+def _unavailable_adapter_names(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
+    status_by_adapter = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
+    names = []
+    for adapter in evidence_plan.needed_adapters:
+        if status_by_adapter.get(adapter) not in {"success", "partial"}:
+            names.append(adapter.replace("_", " "))
+    return names
+
+
 def _provider_partial_fallback(
     request: AgentForgeRequest,
     trace_id: str,
@@ -594,7 +711,7 @@ def _provider_partial_fallback(
     evidence_plan: EvidencePlan | None = None,
 ) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
     response = AgentForgeResponse(
-        answer=_focused_uncertainty_answer(request.message),
+        answer=_fallback_answer_for_plan(request, evidence_plan or plan_evidence(request)),
         sections=[],
         claims=[],
         sources=[],

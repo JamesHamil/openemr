@@ -40,6 +40,7 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(classify_question("What allergies do I need to know before ordering anything?"), "allergies")
         self.assertEqual(classify_question("Any active cardiac issues?"), "cardiac")
         self.assertEqual(classify_question("Medication reconciliation summary?"), "med_reconciliation")
+        self.assertEqual(classify_question("What changed since last review?"), "change_since_review")
 
     def test_allergy_plan_selects_allergies_and_risk_meds(self):
         request = _request(
@@ -205,6 +206,41 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertIn("medication-1", plan.selected_source_ids)
         self.assertIn("allergy-1", plan.selected_source_ids)
         self.assertLessEqual(len([source_id for source_id in plan.selected_source_ids if source_id.startswith("problem-")]), 3)
+
+    def test_change_since_review_plan_selects_recent_notes(self):
+        request = _request(
+            "What changed since last review?",
+            [
+                EvidenceSource(
+                    id="note-1",
+                    record_type="note",
+                    recorded_at="2026-04-30T07:00:00Z",
+                    field_path="notes.body",
+                    value="Shortness of breath improved overnight",
+                ),
+                EvidenceSource(
+                    id="note-2",
+                    record_type="note",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="notes.body",
+                    value="Shortness of breath worsened this morning",
+                ),
+                EvidenceSource(
+                    id="problem-1",
+                    record_type="problem",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    value="Pneumonia",
+                ),
+            ],
+            [AdapterStatus(adapter="recent_notes", status="success")],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "change_since_review")
+        self.assertEqual(list(plan.selected_source_ids), ["note-2", "note-1"])
+        self.assertEqual(plan.required_adapters, ("recent_notes",))
 
     def test_missing_required_adapters_is_question_scoped(self):
         request = _request(

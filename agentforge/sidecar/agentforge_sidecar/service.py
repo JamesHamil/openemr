@@ -26,6 +26,9 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     verifier_result = None
     repair_count = None
     status_reason = None
+    source_selection_mode = None
+    stale_blocked_claim_count = None
+    valid_blocked_claim_count = None
 
     with chat_observation(request, settings, trace_id) as chat_span:
         try:
@@ -99,6 +102,9 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 verifier_result = getattr(provider_diagnostics, "verifier_result", None)
                 repair_count = getattr(provider_diagnostics, "repair_count", None)
                 status_reason = getattr(provider_diagnostics, "status_reason", None)
+                source_selection_mode = getattr(provider_diagnostics, "source_selection_mode", None)
+                stale_blocked_claim_count = getattr(provider_diagnostics, "stale_blocked_claim_count", None)
+                valid_blocked_claim_count = getattr(provider_diagnostics, "valid_blocked_claim_count", None)
             else:
                 response = mock_response(request, trace_id)
 
@@ -151,6 +157,9 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             verifier_result=verifier_result,
             repair_count=repair_count,
             status_reason=status_reason,
+            source_selection_mode=source_selection_mode,
+            stale_blocked_claim_count=stale_blocked_claim_count,
+            valid_blocked_claim_count=valid_blocked_claim_count,
         )
         update_chat_observation(chat_span, response, trace, settings)
     return response, trace

@@ -120,6 +120,7 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
     negative_allergies = [source for source in allergies if source.metadata.get("status") == "absent"]
     meds = by_type.get("medication", [])
     labs = by_type.get("lab", [])
+    notes = by_type.get("note", [])
     missing = [status.adapter for status in adapter_status if status.status != "success"]
 
     if "medication reconciliation" in normalized or "reconciliation" in normalized:
@@ -129,6 +130,11 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
                 "Confirm active medications versus historical entries before ordering changes."
             )
         return "No active medication entries were retrieved for reconciliation in this snapshot."
+
+    if "what changed" in normalized or "changed since" in normalized or "since last review" in normalized:
+        if notes:
+            return f"Recent notes show a change to verify: {_join_values(notes)}."
+        return "No recent note evidence was retrieved to compare changes since last review; confirm in the chart."
 
     if _is_broad_brief_request(normalized):
         sentences = []

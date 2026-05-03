@@ -152,3 +152,6 @@ class TraceRecord(StrictModel):
     verifier_result: str | None = None
     repair_count: int | None = None
     status_reason: str | None = None
+    source_selection_mode: str | None = None
+    stale_blocked_claim_count: int | None = None
+    valid_blocked_claim_count: int | None = None

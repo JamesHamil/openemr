@@ -15,6 +15,7 @@ AnswerFamily = Literal[
     "med_reconciliation",
     "first_room",
     "missing_data",
+    "change_since_review",
     "labs",
     "broad_brief",
     "long_tail",
@@ -53,6 +54,8 @@ def classify_question(message: str) -> AnswerFamily:
     normalized = " ".join(message.lower().split())
     if any(term in normalized for term in ("medication reconciliation", "med rec", "reconciliation")):
         return "med_reconciliation"
+    if any(term in normalized for term in ("what changed", "changed since", "since last review")):
+        return "change_since_review"
     if "missing" in normalized or "before making clinical decisions" in normalized:
         return "missing_data"
     if "lab" in normalized or "labs" in normalized:
@@ -170,6 +173,17 @@ def _family_policy(
                 "Avoid implying missing data is absent from reality.",
             ),
         )
+    if family == "change_since_review":
+        return (
+            ("recent_notes",),
+            (),
+            ("note",),
+            (
+                "Compare selected recent note evidence for clinically relevant changes since the last review.",
+                "Preserve direction and timing language from notes, such as improved, worsened, overnight, or this morning.",
+                "If notes conflict, say they conflict and ask the clinician to confirm the latest status.",
+            ),
+        )
     if family == "labs":
         return (
             ("labs",),
@@ -247,6 +261,8 @@ def _select_sources(request: AgentForgeRequest, family: AnswerFamily) -> list[Ev
         add(_by_type(sources, "vital"), 1)
     elif family == "missing_data":
         add(sources, 10)
+    elif family == "change_since_review":
+        add(_by_type(sources, "note"), 8)
     elif family == "labs":
         add(_by_type(sources, "lab"), 8)
     elif family == "broad_brief":
