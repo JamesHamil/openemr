@@ -4,7 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 
-from .schemas import AgentForgeRequest, EvidenceSource, ToolCallResult, ToolPhaseResult
+from .schemas import AgentForgeRequest, EvidenceSource, ToolCallResult, ToolName, ToolPhaseResult
 
 MAX_TOOL_CALLS = 6
 MAX_TOOL_RESULTS = 8
@@ -77,6 +77,33 @@ TOOL_DEFINITIONS = [
             "additionalProperties": False,
         },
     },
+    {
+        "type": "function",
+        "name": "summarize_by_type",
+        "description": "Summarize available evidence counts and representative source ids by record type.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "record_types": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional record_type list like problem, allergy, medication, lab, vital, note, demographic.",
+                },
+                "limit_per_type": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
+        "name": "check_allergy_conflicts",
+        "description": "Compare allergy and medication evidence for obvious allergy/medication conflicts or allergy-management meds to verify.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+    },
 ]
 
 TOOL_SYSTEM_PROMPT = """You are selecting chart evidence for a hospitalist-facing answer.
@@ -97,6 +124,8 @@ class ToolPhaseDiagnostics:
     fallback_reason: str = ""
     planning_latency_ms: int = 0
     invalid_source_id_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[ToolPhaseResult, ToolPhaseDiagnostics]:
@@ -124,6 +153,7 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
         ],
         tools=TOOL_DEFINITIONS,
     )
+    input_tokens, output_tokens = _usage_tokens(response)
 
     for _ in range(MAX_TOOL_CALLS):
         function_calls = _extract_function_calls(response)
@@ -162,6 +192,9 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
             input=tool_outputs,
             tools=TOOL_DEFINITIONS,
         )
+        next_input_tokens, next_output_tokens = _usage_tokens(response)
+        input_tokens += next_input_tokens
+        output_tokens += next_output_tokens
 
         if budget_exhausted:
             response = client.responses.create(
@@ -170,6 +203,9 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
                 max_output_tokens=700,
                 input=[{"role": "user", "content": TOOL_BUDGET_EXHAUSTED_PROMPT}],
             )
+            next_input_tokens, next_output_tokens = _usage_tokens(response)
+            input_tokens += next_input_tokens
+            output_tokens += next_output_tokens
             break
 
     plan_response = client.responses.parse(
@@ -187,6 +223,9 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
         ],
         text_format=ToolPhaseResult,
     )
+    next_input_tokens, next_output_tokens = _usage_tokens(plan_response)
+    input_tokens += next_input_tokens
+    output_tokens += next_output_tokens
     parsed = plan_response.output_parsed
     if not parsed:
         raise RuntimeError("Tool phase did not return parsed ToolPhaseResult output")
@@ -214,6 +253,8 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
         fallback_reason=fallback_reason,
         planning_latency_ms=int((time.perf_counter() - started) * 1000),
         invalid_source_id_count=invalid_source_id_count,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
     )
     return result, diagnostics
 
@@ -257,6 +298,31 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
             ]
         }
         return ToolCallResult(tool="list_adapter_status", success=True, payload=payload)
+
+    if name == "summarize_by_type":
+        record_types = arguments.get("record_types") or []
+        if not isinstance(record_types, list):
+            record_types = []
+        limit_raw = arguments.get("limit_per_type", 3)
+        try:
+            limit_per_type = int(limit_raw)
+        except (TypeError, ValueError):
+            limit_per_type = 3
+        payload = {
+            "summary": summarize_by_type(
+                request,
+                [str(record_type) for record_type in record_types],
+                max(1, min(limit_per_type, 6)),
+            )
+        }
+        return ToolCallResult(tool="summarize_by_type", success=True, payload=payload)
+
+    if name == "check_allergy_conflicts":
+        return ToolCallResult(
+            tool="check_allergy_conflicts",
+            success=True,
+            payload=check_allergy_conflicts(request),
+        )
 
     return ToolCallResult(tool=_tool_literal(name), success=False, payload={}, error="unknown_tool")
 
@@ -311,6 +377,75 @@ def get_sources(request: AgentForgeRequest, ids: list[str]) -> list[dict]:
             continue
         matches.append(_source_payload(source))
     return matches
+
+
+def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit_per_type: int = 3) -> list[dict]:
+    allowed_types = {record_type.strip().lower() for record_type in record_types if record_type}
+    grouped: dict[str, list[EvidenceSource]] = {}
+    for source in request.evidence_bundle.sources:
+        record_type = source.record_type.lower()
+        if allowed_types and record_type not in allowed_types:
+            continue
+        grouped.setdefault(record_type, []).append(source)
+
+    summaries = []
+    for record_type in sorted(grouped):
+        sources = sorted(grouped[record_type], key=lambda source: (source.recorded_at, source.id), reverse=True)
+        summaries.append(
+            {
+                "record_type": record_type,
+                "count": len(sources),
+                "representative_sources": [
+                    {
+                        "id": source.id,
+                        "recorded_at": source.recorded_at,
+                        "field_path": source.field_path,
+                        "value": source.value[:180],
+                    }
+                    for source in sources[:limit_per_type]
+                ],
+            }
+        )
+    return summaries
+
+
+def check_allergy_conflicts(request: AgentForgeRequest) -> dict:
+    allergies = [source for source in request.evidence_bundle.sources if source.record_type.lower() == "allergy"]
+    medications = [source for source in request.evidence_bundle.sources if source.record_type.lower() == "medication"]
+    conflict_terms = []
+    allergy_management_meds = []
+    review_pairs = []
+
+    allergy_terms = {
+        term
+        for allergy in allergies
+        for term in _keywords(allergy.value)
+        if term not in {"allergy", "allergies", "reaction"}
+    }
+    allergy_med_terms = {"epinephrine", "loratadine", "cetirizine", "fexofenadine", "diphenhydramine"}
+
+    for medication in medications:
+        med_terms = set(_keywords(medication.value))
+        overlap = sorted(allergy_terms & med_terms)
+        if overlap:
+            conflict_terms.extend(overlap)
+            review_pairs.append(
+                {
+                    "medication_source_id": medication.id,
+                    "overlap_terms": overlap,
+                    "medication_value": medication.value[:180],
+                }
+            )
+        if med_terms & allergy_med_terms:
+            allergy_management_meds.append(_source_payload(medication))
+
+    return {
+        "allergy_source_ids": [source.id for source in allergies],
+        "medication_source_ids": [source.id for source in medications],
+        "potential_conflict_terms": sorted(set(conflict_terms)),
+        "review_pairs": review_pairs[:6],
+        "allergy_management_meds": allergy_management_meds[:6],
+    }
 
 
 def _extract_function_calls(response) -> list[dict]:
@@ -416,7 +551,20 @@ def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit:
     return selected
 
 
-def _tool_literal(name: str):
-    if name in {"search_sources", "get_sources", "list_adapter_status"}:
+def _usage_tokens(response) -> tuple[int, int]:
+    usage = getattr(response, "usage", None)
+    if usage is None:
+        return 0, 0
+    if isinstance(usage, dict):
+        return int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0), int(
+            usage.get("output_tokens") or usage.get("completion_tokens") or 0
+        )
+    return int(getattr(usage, "input_tokens", getattr(usage, "prompt_tokens", 0)) or 0), int(
+        getattr(usage, "output_tokens", getattr(usage, "completion_tokens", 0)) or 0
+    )
+
+
+def _tool_literal(name: str) -> ToolName:
+    if name in {"search_sources", "get_sources", "list_adapter_status", "summarize_by_type", "check_allergy_conflicts"}:
         return name
     return "search_sources"

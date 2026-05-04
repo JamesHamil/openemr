@@ -29,6 +29,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     source_selection_mode = None
     stale_blocked_claim_count = None
     valid_blocked_claim_count = None
+    actual_input_tokens = None
+    actual_output_tokens = None
 
     with chat_observation(request, settings, trace_id) as chat_span:
         try:
@@ -105,6 +107,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 source_selection_mode = getattr(provider_diagnostics, "source_selection_mode", None)
                 stale_blocked_claim_count = getattr(provider_diagnostics, "stale_blocked_claim_count", None)
                 valid_blocked_claim_count = getattr(provider_diagnostics, "valid_blocked_claim_count", None)
+                actual_input_tokens = getattr(provider_diagnostics, "input_tokens", None) or None
+                actual_output_tokens = getattr(provider_diagnostics, "output_tokens", None) or None
             else:
                 response = mock_response(request, trace_id)
 
@@ -141,8 +145,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             source_count=len(request.evidence_bundle.sources),
             collector_statuses=request.evidence_bundle.adapter_status,
             blocked_claim_count=len(response.blocked_claims),
-            estimated_input_tokens=_rough_tokens(request.model_dump_json()),
-            estimated_output_tokens=_rough_tokens(response.model_dump_json()),
+            estimated_input_tokens=actual_input_tokens if actual_input_tokens is not None else _rough_tokens(request.model_dump_json()),
+            estimated_output_tokens=actual_output_tokens if actual_output_tokens is not None else _rough_tokens(response.model_dump_json()),
             estimated_cost_usd=0.0,
             latency_ms=latency_ms,
             error=error,

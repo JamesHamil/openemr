@@ -29,8 +29,9 @@ from agentforge_sidecar.tool_agent import ToolPhaseDiagnostics
 
 
 class _Parsed:
-    def __init__(self, output):
+    def __init__(self, output, input_tokens=0, output_tokens=0):
         self.output_parsed = output
+        self.usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
 
 
 class _FakeResponses:
@@ -38,7 +39,11 @@ class _FakeResponses:
         self.outputs = list(outputs)
 
     def parse(self, **_kwargs):
-        return _Parsed(self.outputs.pop(0))
+        output = self.outputs.pop(0)
+        if isinstance(output, tuple):
+            parsed, input_tokens, output_tokens = output
+            return _Parsed(parsed, input_tokens, output_tokens)
+        return _Parsed(output)
 
 
 class _FakeClient:
@@ -167,11 +172,15 @@ class OpenAIProviderTest(unittest.TestCase):
         )
         client = _FakeClient(
             [
-                composed,
-                ModelVerificationResult(
-                    result="passed",
-                    status_recommendation="verified",
-                    citation_coverage=1.0,
+                (composed, 100, 20),
+                (
+                    ModelVerificationResult(
+                        result="passed",
+                        status_recommendation="verified",
+                        citation_coverage=1.0,
+                    ),
+                    80,
+                    5,
                 ),
             ]
         )
@@ -186,6 +195,8 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.source_selection_mode, "planner")
         self.assertEqual(diagnostics.tool_call_count, 0)
         self.assertEqual(diagnostics.planning_latency_ms, 0)
+        self.assertEqual(diagnostics.input_tokens, 180)
+        self.assertEqual(diagnostics.output_tokens, 25)
 
     def test_openai_response_uses_model_tool_phase_for_low_confidence_plan(self):
         request = _request().model_copy(update={"message": "What is the zebulon index?"})
@@ -250,7 +261,7 @@ class OpenAIProviderTest(unittest.TestCase):
                     status_recommendation="partial",
                     citation_coverage=0.5,
                 ),
-                repaired,
+                (repaired, 55, 11),
             ]
         )
 
@@ -268,6 +279,8 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(response.answer, repaired.answer)
         self.assertEqual(metadata.repair_count, 1)
         self.assertEqual(metadata.status_reason, "model_verifier_repaired")
+        self.assertEqual(metadata.input_tokens, 55)
+        self.assertEqual(metadata.output_tokens, 11)
 
     def test_missing_data_empty_selection_fallback_names_unavailable_adapters(self):
         request = _request().model_copy(update={"message": "What is missing that I need before making clinical decisions?"})

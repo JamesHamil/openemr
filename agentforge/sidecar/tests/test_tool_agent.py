@@ -11,7 +11,7 @@ from agentforge_sidecar.schemas import (
     ToolPhaseResult,
     EvidenceSource,
 )
-from agentforge_sidecar.tool_agent import run_tool_phase, search_sources
+from agentforge_sidecar.tool_agent import check_allergy_conflicts, execute_tool, run_tool_phase, search_sources, summarize_by_type
 
 
 class _FakeResponse:
@@ -179,6 +179,97 @@ class ToolAgentTest(unittest.TestCase):
         self.assertTrue(matches)
         self.assertEqual(matches[0]["record_type"], "allergy")
         self.assertEqual(matches[0]["id"], "allergy-2")
+
+    def test_summarize_by_type_returns_counts_and_representative_sources(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={
+                        "sources": [
+                            EvidenceSource(
+                                id="problem-1",
+                                record_type="problem",
+                                recorded_at="2026-04-30T08:00:00Z",
+                                field_path="lists.title",
+                                value="Hypertension",
+                            ),
+                            EvidenceSource(
+                                id="problem-2",
+                                record_type="problem",
+                                recorded_at="2026-04-30T08:05:00Z",
+                                field_path="lists.title",
+                                value="Prediabetes",
+                            ),
+                            EvidenceSource(
+                                id="allergy-1",
+                                record_type="allergy",
+                                recorded_at="2026-04-30T08:02:00Z",
+                                field_path="lists.title",
+                                value="Allergy to eggs",
+                            ),
+                        ]
+                    }
+                )
+            }
+        )
+
+        summary = summarize_by_type(request, ["problem"], 1)
+
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["record_type"], "problem")
+        self.assertEqual(summary[0]["count"], 2)
+        self.assertEqual(summary[0]["representative_sources"][0]["id"], "problem-2")
+
+    def test_check_allergy_conflicts_surfaces_overlap_and_allergy_management_meds(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={
+                        "sources": [
+                            EvidenceSource(
+                                id="allergy-1",
+                                record_type="allergy",
+                                recorded_at="2026-04-30T08:00:00Z",
+                                field_path="lists.title",
+                                value="Penicillin allergy",
+                            ),
+                            EvidenceSource(
+                                id="medication-1",
+                                record_type="medication",
+                                recorded_at="2026-04-30T08:05:00Z",
+                                field_path="prescriptions.drug",
+                                value="Penicillin VK",
+                            ),
+                            EvidenceSource(
+                                id="medication-2",
+                                record_type="medication",
+                                recorded_at="2026-04-30T08:06:00Z",
+                                field_path="prescriptions.drug",
+                                value="Loratadine 5 MG",
+                            ),
+                        ]
+                    }
+                )
+            }
+        )
+
+        payload = check_allergy_conflicts(request)
+
+        self.assertIn("penicillin", payload["potential_conflict_terms"])
+        self.assertEqual(payload["review_pairs"][0]["medication_source_id"], "medication-1")
+        self.assertEqual(payload["allergy_management_meds"][0]["id"], "medication-2")
+
+    def test_execute_tool_supports_new_summary_and_allergy_tools(self):
+        request = _request()
+
+        summary = execute_tool(request, "summarize_by_type", json.dumps({"record_types": ["problem"]}))
+        conflicts = execute_tool(request, "check_allergy_conflicts", "{}")
+
+        self.assertTrue(summary.success)
+        self.assertEqual(summary.tool, "summarize_by_type")
+        self.assertIn("summary", summary.payload)
+        self.assertTrue(conflicts.success)
+        self.assertEqual(conflicts.tool, "check_allergy_conflicts")
 
 
 if __name__ == "__main__":

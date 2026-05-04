@@ -22,7 +22,7 @@ from .schemas import (
     WarningItem,
 )
 from .settings import Settings
-from .tool_agent import ToolPhaseDiagnostics, run_tool_phase
+from .tool_agent import ToolPhaseDiagnostics, _usage_tokens, run_tool_phase
 
 
 COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist preparing for rounds.
@@ -114,6 +114,8 @@ class ProviderDiagnostics:
     source_selection_mode: str = ""
     stale_blocked_claim_count: int = 0
     valid_blocked_claim_count: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
@@ -206,6 +208,8 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 needed_adapters=evidence_plan.needed_adapters,
                 status_reason=reason,
                 source_selection_mode=source_selection_mode,
+                input_tokens=tool_diag.input_tokens,
+                output_tokens=tool_diag.output_tokens,
             )
             return response, diagnostics
 
@@ -251,6 +255,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             parsed = compose_response.output_parsed
             if not parsed:
                 raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
+            compose_input_tokens, compose_output_tokens = _usage_tokens(compose_response)
             parsed_response = _model_response_to_agent_response(parsed, trace_id)
             compose_latency_ms = int((time.perf_counter() - compose_started) * 1000)
             normalized = _limit_response(parsed_response, selected_sources)
@@ -311,6 +316,8 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             source_selection_mode=source_selection_mode,
             stale_blocked_claim_count=stale_blocked_claim_count,
             valid_blocked_claim_count=valid_blocked_claim_count,
+            input_tokens=tool_diag.input_tokens + compose_input_tokens + verification_metadata.input_tokens,
+            output_tokens=tool_diag.output_tokens + compose_output_tokens + verification_metadata.output_tokens,
         )
         return normalized, diagnostics
     except Exception:  # pragma: no cover - runtime/model-path safeguard
@@ -330,6 +337,8 @@ class VerificationMetadata:
     citation_coverage: float | None = None
     repair_count: int = 0
     status_reason: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def _planner_tool_phase_result(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> ToolPhaseResult:
@@ -483,6 +492,7 @@ def _model_verify_and_repair(
             parsed = verify_response.output_parsed
             if not parsed:
                 raise RuntimeError("Model verifier did not return parsed output")
+            verify_input_tokens, verify_output_tokens = _usage_tokens(verify_response)
             update_generation_observation(
                 verify_observation,
                 settings,
@@ -499,6 +509,8 @@ def _model_verify_and_repair(
             citation_coverage=parsed.citation_coverage,
             repair_count=0,
             status_reason="model_verifier_passed" if parsed.result == "passed" else "; ".join(parsed.issues[:3]),
+            input_tokens=verify_input_tokens,
+            output_tokens=verify_output_tokens,
         )
         if parsed.result == "passed":
             if parsed.status_recommendation != response.verification_status:
@@ -523,12 +535,17 @@ def _model_verify_and_repair(
                 citation_coverage=parsed.citation_coverage,
                 repair_count=0,
                 status_reason="model_verifier_unrepaired",
+                input_tokens=verify_input_tokens,
+                output_tokens=verify_output_tokens,
             )
-        return repaired, VerificationMetadata(
+        repaired_response, repair_input_tokens, repair_output_tokens = repaired
+        return repaired_response, VerificationMetadata(
             result=parsed.result,
             citation_coverage=parsed.citation_coverage,
             repair_count=1,
             status_reason="model_verifier_repaired",
+            input_tokens=verify_input_tokens + repair_input_tokens,
+            output_tokens=verify_output_tokens + repair_output_tokens,
         )
     except Exception:
         return response, VerificationMetadata(
@@ -549,7 +566,7 @@ def _repair_response(
     evidence_plan: EvidencePlan,
     verification: ModelVerificationResult,
     trace_id: str,
-) -> AgentForgeResponse | None:
+) -> tuple[AgentForgeResponse, int, int] | None:
     repair_payload = {
         "message": request.message,
         "evidence_plan": _plan_payload(evidence_plan),
@@ -583,6 +600,7 @@ def _repair_response(
             parsed = repair_response.output_parsed
             if not parsed:
                 return None
+            repair_input_tokens, repair_output_tokens = _usage_tokens(repair_response)
             repaired = _limit_response(_model_response_to_agent_response(parsed, trace_id), selected_sources)
             update_generation_observation(
                 repair_observation,
@@ -595,7 +613,7 @@ def _repair_response(
                 },
                 metadata={"repair_count": 1},
             )
-            return repaired
+            return repaired, repair_input_tokens, repair_output_tokens
     except Exception:
         return None
 

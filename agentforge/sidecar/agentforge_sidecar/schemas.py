@@ -103,13 +103,22 @@ class AgentForgeResponse(StrictModel):
     trace_id: str
 
 
+ToolName = Literal[
+    "search_sources",
+    "get_sources",
+    "list_adapter_status",
+    "summarize_by_type",
+    "check_allergy_conflicts",
+]
+
+
 class ToolCallRequest(StrictModel):
-    tool: Literal["search_sources", "get_sources", "list_adapter_status"]
+    tool: ToolName
     arguments: dict = Field(default_factory=dict)
 
 
 class ToolCallResult(StrictModel):
-    tool: Literal["search_sources", "get_sources", "list_adapter_status"]
+    tool: ToolName
     success: bool
     payload: dict = Field(default_factory=dict)
     error: str = ""
