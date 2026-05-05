@@ -1,4 +1,5 @@
 import unittest
+import base64
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -52,6 +53,34 @@ def _post(client: TestClient, body: dict, secret: str = SECRET):
     return client.post("/v1/chat", json=body, headers={"X-AgentForge-Signature": sign_payload(body, secret)})
 
 
+def _extract_payload(expires_at: datetime | str | None = None) -> dict:
+    if expires_at is None:
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+    if isinstance(expires_at, datetime):
+        expires_at = expires_at.isoformat()
+    return {
+        "schema_version": "agentforge.document_extract.v1",
+        "request_id": "doc-req-test",
+        "expires_at": expires_at,
+        "document_type": "lab_pdf",
+        "source_id": "openemr-document-99",
+        "filename": "lab.pdf",
+        "mime_type": "application/pdf",
+        "content_base64": base64.b64encode(b"Potassium 5.8 mmol/L").decode("ascii"),
+        "text_hint": "Potassium 5.8 mmol/L",
+        "scope": {
+            "user_hash": "user",
+            "patient_hash": "patient",
+            "encounter_hash": "encounter",
+            "evidence_bundle_id": "document-99",
+        },
+    }
+
+
+def _post_extract(client: TestClient, body: dict, secret: str = SECRET):
+    return client.post("/v1/extract-document", json=body, headers={"X-AgentForge-Signature": sign_payload(body, secret)})
+
+
 class AppRequestValidationTest(unittest.TestCase):
     def test_valid_signed_unexpired_request_succeeds(self):
         body = _payload()
@@ -97,6 +126,27 @@ class AppRequestValidationTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 503)
         self.assertIn("signing secret", response.json()["detail"])
+
+    def test_document_extraction_returns_cited_facts(self):
+        body = _extract_payload()
+        settings = Settings(mode="mock", signing_secret=SECRET, request_ttl_seconds=300)
+        with patch("agentforge_sidecar.app.load_settings", return_value=settings):
+            response = _post_extract(TestClient(app), body)
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["extraction_status"], "success")
+        self.assertGreaterEqual(len(payload["extracted_facts"]), 1)
+        self.assertEqual(payload["extracted_facts"][0]["citation"]["source_id"], "openemr-document-99")
+
+    def test_expired_document_extraction_is_rejected(self):
+        body = _extract_payload(datetime.now(timezone.utc) - timedelta(minutes=2))
+        settings = Settings(mode="mock", signing_secret=SECRET, request_ttl_seconds=300)
+        with patch("agentforge_sidecar.app.load_settings", return_value=settings):
+            response = _post_extract(TestClient(app), body)
+
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("Expired", response.json()["detail"])
 
 
 if __name__ == "__main__":

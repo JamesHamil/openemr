@@ -39,4 +39,22 @@ passed: 22
 failed: 0
 ```
 
-The runner prints a JSON summary with pass/fail status for each case.
+Week 2 multimodal runner:
+
+```shell
+PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_week2_evals.py
+```
+
+Latest Week 2 local run:
+
+```text
+passed: 50
+failed: 0
+schema_valid: 50/50
+citation_present: 50/50
+factually_consistent: 50/50
+safe_refusal: 50/50
+no_phi_in_logs: 50/50
+```
+
+The runners print JSON summaries with pass/fail status for each case.

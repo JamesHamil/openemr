@@ -10,7 +10,7 @@ MAX_TOOL_CALLS = 6
 MAX_TOOL_RESULTS = 8
 MAX_SELECTED_SOURCES = 10
 
-FALLBACK_RECORD_TYPE_ORDER = ["problem", "allergy", "medication", "lab", "vital", "note", "demographic"]
+FALLBACK_RECORD_TYPE_ORDER = ["problem", "allergy", "medication", "lab", "document_fact", "guideline", "vital", "note", "demographic"]
 SEMANTIC_TYPE_HINTS = {
     "problem": {
         "problem",
@@ -26,9 +26,11 @@ SEMANTIC_TYPE_HINTS = {
     },
     "allergy": {"allergy", "allergies", "reaction", "reactions"},
     "medication": {"medication", "medications", "med", "meds", "drug", "drugs", "reconcile", "reconciliation"},
-    "lab": {"lab", "labs", "result", "results", "glucose", "creatinine", "a1c"},
+    "lab": {"lab", "labs", "result", "results", "glucose", "creatinine", "a1c", "cbc", "hemoglobin", "platelet"},
     "vital": {"vital", "vitals", "blood", "pressure", "pulse", "temperature", "weight"},
     "note": {"note", "notes", "assessment", "plan", "history"},
+    "document_fact": {"document", "pdf", "form", "intake", "uploaded", "extracted"},
+    "guideline": {"guideline", "recommend", "follow", "review", "risk", "red", "flag"},
 }
 
 TOOL_DEFINITIONS = [
@@ -276,7 +278,7 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
         except (TypeError, ValueError):
             limit = MAX_TOOL_RESULTS
         limit = max(1, min(limit, MAX_TOOL_RESULTS))
-        payload = {"matches": search_sources(request, query, record_types, limit)}
+        payload = {"matches": search_sources(request, query, _expand_record_types(record_types), limit)}
         return ToolCallResult(tool="search_sources", success=True, payload=payload)
 
     if name == "get_sources":
@@ -335,7 +337,7 @@ def search_sources(
 ) -> list[dict]:
     query_terms = _keywords(query)
     hinted_types = _hinted_record_types(query_terms)
-    allowed_types = {record_type.strip().lower() for record_type in record_types if record_type}
+    allowed_types = set(_expand_record_types(record_types))
     if hinted_types and not allowed_types:
         allowed_types = hinted_types
     scored: list[tuple[int, EvidenceSource]] = []
@@ -344,7 +346,8 @@ def search_sources(
         if allowed_types and source.record_type.lower() not in allowed_types:
             continue
 
-        haystack = f"{source.record_type} {source.field_path} {source.value} {source.note_span or ''}".lower()
+        metadata_text = " ".join(str(value) for value in source.metadata.values())
+        haystack = f"{source.record_type} {source.field_path} {source.value} {source.note_span or ''} {metadata_text}".lower()
         score = 0
         for term in query_terms:
             if term in haystack:
@@ -353,6 +356,8 @@ def search_sources(
                 score += 3
         if source.record_type.lower() in hinted_types:
             score += 4
+        if source.record_type.lower() == "document_fact" and "lab_pdf" in metadata_text.lower() and "lab" in hinted_types:
+            score += 5
         if score == 0 and not query_terms:
             score = 1
         if score > 0:
@@ -519,7 +524,16 @@ def _hinted_record_types(query_terms: list[str]) -> set[str]:
     for record_type, hints in SEMANTIC_TYPE_HINTS.items():
         if terms & hints:
             hinted.add(record_type)
+    if "lab" in hinted:
+        hinted.add("document_fact")
     return hinted
+
+
+def _expand_record_types(record_types: list[str]) -> list[str]:
+    expanded = {record_type.strip().lower() for record_type in record_types if record_type}
+    if "lab" in expanded:
+        expanded.add("document_fact")
+    return sorted(expanded)
 
 
 def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit: int) -> list[EvidenceSource]:

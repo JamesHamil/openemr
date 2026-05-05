@@ -19,6 +19,12 @@ return [
     'require' => [
         'openemr' => '>=7.0.0',
     ],
+    'install' => [
+        'sql' => 'sql/install.sql',
+    ],
+    'uninstall' => [
+        'sql' => 'sql/uninstall.sql',
+    ],
     'menu' => [
         [
             'label' => 'Clinical Co-Pilot',

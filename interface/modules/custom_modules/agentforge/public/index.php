@@ -280,7 +280,9 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
         }
 
         function send(message) {
-            top.restoreSession();
+            if (top && typeof top.restoreSession === 'function') {
+                top.restoreSession();
+            }
             let elapsed = 0;
             status.textContent = 'Generating... 0s';
             briefButton.disabled = true;

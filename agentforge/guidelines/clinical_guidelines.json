@@ -1,0 +1,50 @@
+[
+  {
+    "id": "guideline-abnormal-potassium-1",
+    "title": "Demo Guideline: Abnormal Potassium Follow-Up",
+    "section": "hyperkalemia-review",
+    "citation_label": "Local demo guideline, potassium review",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "For an elevated potassium result, clinicians should confirm specimen quality, kidney function context, medication contributors, and whether urgent symptoms or ECG review are relevant."
+  },
+  {
+    "id": "guideline-diabetes-a1c-1",
+    "title": "Demo Guideline: Diabetes Follow-Up",
+    "section": "a1c-review",
+    "citation_label": "Local demo guideline, A1c review",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "For elevated A1c or diabetes follow-up, clinicians commonly review medication adherence, hypoglycemia history, diet, kidney function, and recent glucose trends before changing therapy."
+  },
+  {
+    "id": "guideline-hypertension-1",
+    "title": "Demo Guideline: Blood Pressure Review",
+    "section": "hypertension-follow-up",
+    "citation_label": "Local demo guideline, blood pressure review",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "For hypertension follow-up, clinicians should compare recent blood pressure readings, symptoms, adherence, medication list, and cardiovascular risk factors."
+  },
+  {
+    "id": "guideline-medication-review-1",
+    "title": "Demo Guideline: Medication Review",
+    "section": "medication-reconciliation",
+    "citation_label": "Local demo guideline, medication review",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "Medication reconciliation should compare the active medication list with patient-reported use, allergies, recent discontinuations, and high-risk medication conflicts."
+  },
+  {
+    "id": "guideline-allergy-review-1",
+    "title": "Demo Guideline: Allergy Review",
+    "section": "allergy-history",
+    "citation_label": "Local demo guideline, allergy review",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "Allergy review should clarify the triggering agent, reaction type, severity, timing, and whether the listed allergy conflicts with any current medication."
+  },
+  {
+    "id": "guideline-red-flags-1",
+    "title": "Demo Guideline: Red Flag Follow-Up",
+    "section": "visit-opening",
+    "citation_label": "Local demo guideline, red flags",
+    "published_at": "2026-01-01T00:00:00Z",
+    "text": "When entering the room, clinicians should ask about current symptoms, recent changes, medication use, allergies, and any red-flag concerns suggested by chart or intake evidence."
+  }
+]

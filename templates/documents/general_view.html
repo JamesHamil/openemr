@@ -96,6 +96,51 @@ function tagProcedure() {
 	f.procedure_code.value = f.image_procedure_id.options[f.image_procedure_id.selectedIndex].getAttribute('data-code');
 	document.forms['procedure_tag'].submit();
 }
+
+function extractWithAgentForge(docid, patientId) {
+    if (top && typeof top.restoreSession === 'function') {
+        top.restoreSession();
+    }
+    let button = $('#agentforgeExtractButton');
+    let status = $('#agentforgeExtractStatus');
+    let data = new URLSearchParams();
+    data.set('csrf_token_form', {$csrf_token_form|js_escape});
+    data.set('patient_id', patientId);
+    data.set('document_type', $('#agentforgeDocumentType').val());
+    data.set('openemr_document_id', docid);
+
+    button.prop('disabled', true);
+    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Extracting document evidence...'});
+
+    let requestOptions = new Object();
+    requestOptions.method = 'POST';
+    requestOptions.headers = new Headers();
+    requestOptions.headers.append('Content-Type', 'application/x-www-form-urlencoded');
+    requestOptions.body = data.toString();
+
+    fetch({$webroot|js_escape} + '/interface/modules/custom_modules/agentforge/public/extract_document.php', requestOptions).then(function (response) {
+        return response.json();
+    }).then(function (payload) {
+        if (payload.error) {
+            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='AgentForge extraction failed.'});
+            return;
+        }
+        let extraction = payload.extraction || {};
+        let facts = extraction.extracted_facts || [];
+        let traceId = extraction.trace_id || '';
+        let extractionStatus = extraction.extraction_status || 'unknown';
+        let statusClass = extractionStatus === 'failed' ? 'text-danger' : 'text-success';
+        status.removeClass('text-muted text-danger text-success').addClass(statusClass).text(
+            {xlj t='AgentForge extraction'} + ' ' + (extraction.extraction_status || 'unknown') + ': ' +
+            facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} + ' ' + traceId
+        );
+    }).catch(function () {
+        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='AgentForge extraction failed before a response was returned.'});
+    }).finally(function () {
+        button.prop('disabled', false);
+    });
+    return false;
+}
 </script>
 
 <table class="w-100 align-top">
@@ -110,12 +155,18 @@ function tagProcedure() {
             <span class="float-right">
             <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};</script>
             {dispatchPatientDocumentEvent event="actions_render_fax_anchor"}
+            <select id="agentforgeDocumentType" class="form-control form-control-sm d-inline-block w-auto align-middle" aria-label="{xla t='AgentForge document type'}">
+              <option value="lab_pdf">{xlt t='Lab PDF'}</option>
+              <option value="intake_form">{xlt t='Intake Form'}</option>
+            </select>
+            <button id="agentforgeExtractButton" type="button" class="btn btn-primary" onclick="extractWithAgentForge({$file->get_id()|attr_js}, {$file->get_foreign_id()|attr_js}); return false;">{xlt t='Extract with AgentForge'}</button>
             <a class="btn btn-primary" href='' onclick='return popoutcontent(this)' title="{xla t='Pop Out Full Screen.'}">{xlt t='Pop Out'}</a>
             <a class="btn btn-primary" href="{$web_path|attr}" title="{xla t='Original file'}" onclick="top.restoreSession()">{xlt t='Download'}</a>
             <a class="btn btn-primary" href='' onclick='return showpnotes({$file->get_id()|attr_js})'>{xlt t='Show Notes'}</a>
             {$delete_string}
             </span>
             </h4>
+            <div id="agentforgeExtractStatus" class="text-muted small"></div>
             </div>
         </td>
     </tr>

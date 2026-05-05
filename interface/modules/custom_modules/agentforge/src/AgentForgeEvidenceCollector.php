@@ -2,6 +2,8 @@
 
 namespace OpenEMR\Modules\AgentForge;
 
+require_once(__DIR__ . "/AgentForgeDocumentStore.php");
+
 class AgentForgeEvidenceCollector
 {
     public function collect(string $pid, string $encounterId = '', string $message = ''): array
@@ -29,6 +31,9 @@ class AgentForgeEvidenceCollector
         }, $statuses);
         $this->collectAdapter('recent_notes', function () use ($pid, &$sources, &$statuses): void {
             $this->collectNotes($pid, $sources, $statuses);
+        }, $statuses);
+        $this->collectAdapter('agentforge_documents', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectExtractedDocumentFacts($pid, $sources, $statuses);
         }, $statuses);
 
         return [
@@ -307,6 +312,18 @@ class AgentForgeEvidenceCollector
         $statuses[] = $count === 0
             ? $this->status('recent_notes', 'unavailable', 'No patient notes found in retrieved pnotes records.')
             : $this->status('recent_notes', 'success');
+    }
+
+    private function collectExtractedDocumentFacts(string $pid, array &$sources, array &$statuses): void
+    {
+        $store = new AgentForgeDocumentStore();
+        $documentSources = $store->recentFactSources($pid, 12);
+        foreach ($documentSources as $source) {
+            $sources[] = $source;
+        }
+        $statuses[] = count($documentSources) === 0
+            ? $this->status('agentforge_documents', 'unavailable', 'No AgentForge extracted document facts found for this patient.')
+            : $this->status('agentforge_documents', 'success');
     }
 
     private function addSource(

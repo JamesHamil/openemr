@@ -26,16 +26,28 @@ Current deployed checkpoint: https://openemr-production-5533.up.railway.app
 
 Project documents:
 
-- [AUDIT.md](AUDIT.md): final security, performance, architecture, data quality, and compliance audit.
-- [USERS.md](USERS.md): target hospitalist user, workflow, and use cases.
-- [ARCHITECTURE.md](ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
-- [PRD.md](PRD.md): execution source of truth for the Clinical Co-Pilot build.
-- [MVP_SUBMISSION.md](MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
-- [COST_ANALYSIS.md](COST_ANALYSIS.md): AI cost and scale analysis.
+Week 1 baseline:
+
+- [Audit](docs/week-1/AUDIT.md): final security, performance, architecture, data quality, and compliance audit.
+- [Users](docs/week-1/USERS.md): target hospitalist user, workflow, and use cases.
+- [Architecture](docs/week-1/ARCHITECTURE.md): Clinical Co-Pilot architecture defense and AI integration plan.
+- [PRD](docs/week-1/PRD.md): execution source of truth for the Week 1 Clinical Co-Pilot build.
+- [Submission checkpoint](docs/week-1/MVP_SUBMISSION.md): checkpoint checklist, demo outline, limitations, and next steps.
+- [Cost analysis](docs/week-1/COST_ANALYSIS.md): AI cost and scale analysis.
+
+Week 2 multimodal expansion:
+
+- [W2_ARCHITECTURE.md](W2_ARCHITECTURE.md): canonical Week 2 architecture defense for the multimodal evidence agent.
+- [Week 2 PRD notes](docs/week-2/PRD_NOTES.md): extracted requirement summary and guardrails.
+- [Week 2 eval plan](docs/week-2/EVAL_PLAN.md): 50-case boolean eval gate strategy.
+- [Week 2 cost and latency plan](docs/week-2/COST_LATENCY_PLAN.md): measurement and bottleneck plan.
+
+Eval references:
+
 - [agentforge/evals/EVALS.md](agentforge/evals/EVALS.md): eval philosophy, examples, and evals-vs-unit-tests explanation.
 - [agentforge/evals/RESULTS.md](agentforge/evals/RESULTS.md): current eval runner instructions and latest smoke results.
 
-The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority.
+The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority. Week 2 keeps this boundary while planning document ingestion, source-cited extraction, guideline retrieval, an inspectable supervisor graph, and eval-driven CI.
 
 The first execution slice now includes an OpenEMR custom module shell at `interface/modules/custom_modules/agentforge/`, shared contracts under `agentforge/contracts/`, a FastAPI sidecar under `agentforge/sidecar/`, and eval smoke tests under `agentforge/evals/`. The public Railway OpenEMR deployment remains demo-data-only, with production HIPAA readiness reserved for the compliance gate described in `AUDIT.md`. Real OpenAI mode is enabled only with a server-side `OPENAI_API_KEY` and reviewed configuration.
 

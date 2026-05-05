@@ -8,6 +8,25 @@ OpenEMR is responsible for authentication, authorization, patient context, evide
 
 - Request schema: `agentforge.request.v1`
 - Response schema: `agentforge.response.v1`
+- Document extraction request schema: `agentforge.document_extract.v1`
+- Document extraction response schema: `agentforge.document_extract.response.v1`
+
+## Week 2 Document Boundary
+
+OpenEMR Documents stores the source files. The AgentForge module selects an existing patient document and sends a signed, short-lived extraction request to the same sidecar. The sidecar returns structured extracted facts with source citation metadata. Extracted facts are stored in module-owned AgentForge tables and re-enter later chat requests as `document_fact` evidence sources, not as core OpenEMR clinical truth.
+
+Minimum citation fields:
+
+```json
+{
+  "source_type": "lab_pdf",
+  "source_id": "openemr-document-123",
+  "page_or_section": "page 1",
+  "field_or_chunk_id": "lab-result-potassium",
+  "quote_or_value": "Potassium 5.8 mmol/L",
+  "bounding_box": null
+}
+```
 
 ## Response Statuses
 

@@ -20,6 +20,8 @@ The eval runner lives at `agentforge/evals/run_evals.py`.
 
 The case set lives at `agentforge/evals/smoke_cases.json`.
 
+The Week 2 multimodal runner lives at `agentforge/evals/run_week2_evals.py`. It generates 50 synthetic cases covering lab PDF extraction, intake form extraction, document-backed chat, guideline retrieval, safe refusals, and PHI-safe trace checks.
+
 Each case defines:
 
 - `id`: stable scenario name.
@@ -49,6 +51,18 @@ AGENTFORGE_EVAL_MODE=live PYTHONPATH=agentforge/sidecar agentforge/sidecar/.venv
 ```
 
 Default mode is deterministic mock mode so local and CI runs remain stable. Live mode uses the same fixtures but routes through the real OpenAI-backed provider when configured.
+
+Week 2 multimodal gate:
+
+```shell
+PYTHONPATH=agentforge/sidecar agentforge/sidecar/.venv/bin/python agentforge/evals/run_week2_evals.py
+```
+
+Week 2 JSON output:
+
+```shell
+PYTHONPATH=agentforge/sidecar agentforge/sidecar/.venv/bin/python agentforge/evals/run_week2_evals.py --json
+```
 
 ## Evals Versus Unit Tests
 
@@ -185,6 +199,17 @@ Latest local result:
 
 ```text
 22 passed, 0 failed
+```
+
+Latest Week 2 local result:
+
+```text
+50 passed, 0 failed
+schema_valid: 50/50
+citation_present: 50/50
+factually_consistent: 50/50
+safe_refusal: 50/50
+no_phi_in_logs: 50/50
 ```
 
 ## When To Add A New Eval

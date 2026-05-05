@@ -6,6 +6,16 @@ class AgentForgeSidecarClient
 {
     public function send(array $payload): array
     {
+        return $this->postJson('/v1/chat', $payload);
+    }
+
+    public function extractDocument(array $payload): array
+    {
+        return $this->postJson('/v1/extract-document', $payload);
+    }
+
+    private function postJson(string $path, array $payload): array
+    {
         $sidecarUrl = rtrim((string)getenv('AGENTFORGE_SIDECAR_URL'), '/');
         if ($sidecarUrl === '') {
             return $this->fallbackResponse('AgentForge sidecar URL is not configured.');
@@ -32,7 +42,7 @@ class AgentForgeSidecarClient
             ],
         ]);
 
-        $raw = @file_get_contents($sidecarUrl . '/v1/chat', false, $context);
+        $raw = @file_get_contents($sidecarUrl . $path, false, $context);
         if ($raw === false || $raw === '') {
             return $this->fallbackResponse('AgentForge sidecar did not return a response.');
         }

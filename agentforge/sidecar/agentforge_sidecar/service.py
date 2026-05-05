@@ -8,6 +8,7 @@ from .observability import chat_observation, update_chat_observation
 from .openai_provider import openai_response
 from .schemas import AgentForgeRequest, AgentForgeResponse, TraceRecord, WarningItem
 from .settings import Settings
+from .guideline_retriever import augment_with_guidelines
 from .verifier import is_treatment_directive, verify_response
 
 
@@ -31,6 +32,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     valid_blocked_claim_count = None
     actual_input_tokens = None
     actual_output_tokens = None
+    guideline_retrieval_hits = None
+    guideline_rerank_scores: list[float] = []
 
     with chat_observation(request, settings, trace_id) as chat_span:
         try:
@@ -92,7 +95,10 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 )
                 fallback_reason = "agentforge_off"
             elif settings.mode == "real":
-                response, provider_diagnostics = openai_response(request, trace_id, settings)
+                working_request, guideline_diag = augment_with_guidelines(request, settings)
+                guideline_retrieval_hits = guideline_diag["retrieval_hits"]
+                guideline_rerank_scores = guideline_diag["rerank_scores"]
+                response, provider_diagnostics = openai_response(working_request, trace_id, settings)
                 tool_call_count = provider_diagnostics.tool_call_count
                 selected_source_count = provider_diagnostics.selected_source_count
                 fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
@@ -110,10 +116,13 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 actual_input_tokens = getattr(provider_diagnostics, "input_tokens", None) or None
                 actual_output_tokens = getattr(provider_diagnostics, "output_tokens", None) or None
             else:
-                response = mock_response(request, trace_id)
+                working_request, guideline_diag = augment_with_guidelines(request, settings)
+                guideline_retrieval_hits = guideline_diag["retrieval_hits"]
+                guideline_rerank_scores = guideline_diag["rerank_scores"]
+                response = mock_response(working_request, trace_id)
 
             if response.verification_status not in {"refused", "failed"}:
-                response = verify_response(request, response)
+                response = verify_response(locals().get("working_request", request), response)
                 if response.verification_status == "partial" and not response.claims and response.blocked_claims:
                     fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
         except Exception as exc:
@@ -142,8 +151,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             conversation_id=request.conversation_id,
             mode=settings.mode,
             verification_status=response.verification_status,
-            source_count=len(request.evidence_bundle.sources),
-            collector_statuses=request.evidence_bundle.adapter_status,
+            source_count=len(locals().get("working_request", request).evidence_bundle.sources),
+            collector_statuses=locals().get("working_request", request).evidence_bundle.adapter_status,
             blocked_claim_count=len(response.blocked_claims),
             estimated_input_tokens=actual_input_tokens if actual_input_tokens is not None else _rough_tokens(request.model_dump_json()),
             estimated_output_tokens=actual_output_tokens if actual_output_tokens is not None else _rough_tokens(response.model_dump_json()),
@@ -164,6 +173,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             source_selection_mode=source_selection_mode,
             stale_blocked_claim_count=stale_blocked_claim_count,
             valid_blocked_claim_count=valid_blocked_claim_count,
+            guideline_retrieval_hits=guideline_retrieval_hits,
+            guideline_rerank_scores=guideline_rerank_scores,
         )
         update_chat_observation(chat_span, response, trace, settings)
     return response, trace

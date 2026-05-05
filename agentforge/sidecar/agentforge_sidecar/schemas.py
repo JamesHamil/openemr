@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 ResponseStatus = Literal["verified", "partial", "refused", "failed"]
 AdapterStatusValue = Literal["success", "partial", "timeout", "unavailable", "failed"]
 SupportStatus = Literal["supported", "unsupported", "conflicting", "blocked"]
+DocumentType = Literal["lab_pdf", "intake_form"]
+ExtractionStatus = Literal["success", "partial", "failed"]
 
 
 class StrictModel(BaseModel):
@@ -103,6 +105,59 @@ class AgentForgeResponse(StrictModel):
     trace_id: str
 
 
+class SourceCitation(StrictModel):
+    source_type: str
+    source_id: str
+    page_or_section: str = ""
+    field_or_chunk_id: str = ""
+    quote_or_value: str = ""
+    bounding_box: dict[str, float | int] | None = None
+
+
+class ExtractedFact(StrictModel):
+    fact_type: str
+    label: str
+    value: str
+    unit: str = ""
+    reference_range: str = ""
+    abnormal_flag: str = ""
+    recorded_at: str = ""
+    confidence: float = 0.0
+    citation: SourceCitation
+
+
+class WorkerHandoff(StrictModel):
+    worker: str
+    route_reason: str
+    input_summary: str
+    output_status: str
+    latency_ms: int
+    selected_citation_ids: list[str] = Field(default_factory=list)
+
+
+class DocumentExtractionRequest(StrictModel):
+    schema_version: Literal["agentforge.document_extract.v1"]
+    request_id: str
+    expires_at: str
+    document_type: DocumentType
+    source_id: str
+    filename: str
+    mime_type: str
+    content_base64: str
+    text_hint: str = ""
+    scope: Scope
+
+
+class DocumentExtractionResponse(StrictModel):
+    schema_version: Literal["agentforge.document_extract.response.v1"] = "agentforge.document_extract.response.v1"
+    document_type: DocumentType
+    extraction_status: ExtractionStatus
+    extracted_facts: list[ExtractedFact] = Field(default_factory=list)
+    warnings: list[WarningItem] = Field(default_factory=list)
+    worker_handoffs: list[WorkerHandoff] = Field(default_factory=list)
+    trace_id: str
+
+
 ToolName = Literal[
     "search_sources",
     "get_sources",
@@ -164,3 +219,5 @@ class TraceRecord(StrictModel):
     source_selection_mode: str | None = None
     stale_blocked_claim_count: int | None = None
     valid_blocked_claim_count: int | None = None
+    guideline_retrieval_hits: int | None = None
+    guideline_rerank_scores: list[float] = Field(default_factory=list)

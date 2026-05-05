@@ -22,7 +22,7 @@ from .schemas import (
     WarningItem,
 )
 from .settings import Settings
-from .tool_agent import ToolPhaseDiagnostics, _usage_tokens, run_tool_phase
+from .tool_agent import ToolPhaseDiagnostics, _usage_tokens, run_tool_phase, search_sources
 
 
 COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist preparing for rounds.
@@ -179,6 +179,12 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                     },
                 )
         selected_sources = _selected_sources(request, selected_source_ids)
+        if not selected_sources:
+            fallback_source_ids = _fallback_source_ids_for_plan(request, evidence_plan)
+            if fallback_source_ids:
+                selected_source_ids = fallback_source_ids
+                selected_sources = _selected_sources(request, selected_source_ids)
+                source_selection_mode = f"{source_selection_mode}+deterministic_fallback"
         if not selected_sources:
             warnings = []
             reason = tool_diag.fallback_reason or "no_supporting_evidence_selected"
@@ -360,6 +366,17 @@ def _planner_tool_phase_result(request: AgentForgeRequest, evidence_plan: Eviden
         ],
         focus=_planner_focus(evidence_plan),
     )
+
+
+def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
+    if evidence_plan.answer_family != "labs" and "labs" not in evidence_plan.needed_adapters:
+        return []
+    matches = search_sources(request, request.message, ["lab"], 6)
+    return [
+        str(match["id"])
+        for match in matches
+        if match.get("record_type") in {"lab", "document_fact"}
+    ][:6]
 
 
 def _draft_claim_text(source: EvidenceSource) -> str:
