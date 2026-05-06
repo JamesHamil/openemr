@@ -1,5 +1,6 @@
 *
 !Dockerfile.railway
+!railway.json
 !.dockerignore
 !README.md
 !AUDIT.md
@@ -22,3 +23,6 @@
 !interface/modules/custom_modules/
 !interface/modules/custom_modules/agentforge/
 !interface/modules/custom_modules/agentforge/**
+!templates/
+!templates/documents/
+!templates/documents/general_view.html

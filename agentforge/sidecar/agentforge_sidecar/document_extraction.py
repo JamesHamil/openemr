@@ -100,7 +100,7 @@ def _real_extract(
 
     parsed_response = client.responses.parse(
         model=settings.model,
-        max_output_tokens=2200,
+        max_output_tokens=10000,
         input=[
             {"role": "system", "content": EXTRACTION_PROMPT},
             {"role": "user", "content": content},

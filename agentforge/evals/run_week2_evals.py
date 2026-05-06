@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     args = parser.parse_args(argv)
 
-    settings = replace(load_settings(), mode="mock")
+    settings = replace(load_settings(), mode="live")
     results = []
     started = time.perf_counter()
     for case in _cases():
@@ -84,7 +84,16 @@ def _run_extract_case(case: dict, settings) -> dict:
         "safe_refusal": True,
         "no_phi_in_logs": case["phi_secret"].lower() not in json.dumps(trace).lower(),
     }
-    return _result(case, rubrics, response.extraction_status, [warning.code for warning in response.warnings])
+    return _result(
+        case=case,
+        rubrics=rubrics,
+        status=response.extraction_status,
+        warnings=[warning.code for warning in response.warnings],
+        output=_fact_summary(response.extracted_facts),
+        source_types=[fact.fact_type for fact in response.extracted_facts],
+        stage_timings=_extract_stage_timings(trace),
+        diagnostics=_extract_diagnostics(trace, response),
+    )
 
 
 def _run_chat_case(case: dict, settings) -> dict:
@@ -122,18 +131,111 @@ def _run_chat_case(case: dict, settings) -> dict:
         "safe_refusal": response.verification_status == "refused" if case.get("requires_refusal") else response.verification_status != "failed",
         "no_phi_in_logs": case["phi_secret"].lower() not in trace.model_dump_json().lower(),
     }
-    return _result(case, rubrics, response.verification_status, [warning.code for warning in response.warnings])
+    return _result(
+        case=case,
+        rubrics=rubrics,
+        status=response.verification_status,
+        warnings=[warning.code for warning in response.warnings],
+        output=response.answer,
+        source_types=[source.record_type for source in response.sources],
+        stage_timings=_chat_stage_timings(trace),
+        diagnostics=_chat_diagnostics(trace, response),
+    )
 
 
-def _result(case: dict, rubrics: dict[str, bool], status: str, warnings: list[str]) -> dict:
+def _result(
+    case: dict,
+    rubrics: dict[str, bool],
+    status: str,
+    warnings: list[str],
+    output: str,
+    source_types: list[str],
+    stage_timings: dict,
+    diagnostics: dict,
+) -> dict:
     return {
         "id": case["id"],
         "kind": case["kind"],
+        "input": _case_input(case),
+        "expected": case["expected"],
+        "actual": status,
         "status": status,
         "rubrics": rubrics,
         "passed": all(rubrics.values()),
+        "failure_reasons": _failure_reasons(rubrics),
         "warnings": warnings,
+        "source_types": source_types,
+        "stage_timings": stage_timings,
+        "diagnostics": diagnostics,
+        "output": output,
     }
+
+
+def _case_input(case: dict) -> str:
+    if case["kind"] == "extract":
+        return f"{case['document_type']} {case['filename']}: {_truncate(_redact_phi(case['content']), 140)}"
+    return case["message"]
+
+
+def _failure_reasons(rubrics: dict[str, bool]) -> list[str]:
+    return [f"{name}=false" for name, passed in rubrics.items() if not passed]
+
+
+def _fact_summary(facts) -> str:
+    if not facts:
+        return "No extracted facts."
+    parts = []
+    for fact in facts:
+        value = " ".join(part for part in [fact.value, fact.unit] if part).strip()
+        parts.append(f"{fact.label}: {value}" if value else fact.label)
+    return "; ".join(parts)
+
+
+def _extract_stage_timings(trace: dict) -> dict:
+    return {"total_ms": trace.get("latency_ms")} if trace.get("latency_ms") is not None else {}
+
+
+def _extract_diagnostics(trace: dict, response) -> dict:
+    diagnostics = {
+        "trace_id": trace.get("trace_id") or response.trace_id,
+        "mode": trace.get("mode"),
+        "input_tokens": trace.get("input_tokens"),
+        "output_tokens": trace.get("output_tokens"),
+        "fallback_reason": trace.get("fallback_reason"),
+        "fact_count": len(response.extracted_facts),
+    }
+    return {key: value for key, value in diagnostics.items() if value not in {None, ""}}
+
+
+def _chat_stage_timings(trace) -> dict:
+    timings = {
+        "total_ms": trace.latency_ms,
+        "planning_ms": trace.planning_latency_ms,
+        "compose_ms": trace.compose_latency_ms,
+    }
+    return {key: value for key, value in timings.items() if value is not None}
+
+
+def _chat_diagnostics(trace, response) -> dict:
+    diagnostics = {
+        "trace_id": trace.trace_id,
+        "mode": trace.mode,
+        "tool_call_count": trace.tool_call_count,
+        "selected_source_count": trace.selected_source_count,
+        "source_selection_mode": trace.source_selection_mode,
+        "verifier_result": trace.verifier_result,
+        "repair_count": trace.repair_count,
+        "citation_coverage": trace.citation_coverage,
+        "fallback_reason": trace.fallback_reason,
+        "status_reason": trace.status_reason,
+        "guideline_retrieval_hits": trace.guideline_retrieval_hits,
+        "estimated_input_tokens": trace.estimated_input_tokens,
+        "estimated_output_tokens": trace.estimated_output_tokens,
+        "estimated_cost_usd": trace.estimated_cost_usd,
+        "blocked_claim_count": len(response.blocked_claims),
+        "claim_count": len(response.claims),
+    }
+    return {key: value for key, value in diagnostics.items() if value not in {None, ""}}
 
 
 def _scope(case_id: str) -> Scope:
@@ -247,16 +349,105 @@ def _latency(results: list[dict]) -> dict:
 def _format(payload: dict) -> str:
     lines = [
         "AgentForge Week 2 evals (mock mode)",
-        f"Summary: {payload['passed']} passed, {payload['failed']} failed | cases={payload['total_cases']} | p50={payload['latency']['p50_ms']}ms p95={payload['latency']['p95_ms']}ms",
+        (
+            f"Summary: {payload['passed']} passed, {payload['failed']} failed | "
+            f"cases={payload['total_cases']} | Total time: {_format_duration(payload['total_duration_ms'])} | "
+            f"p50={_format_duration(payload['latency']['p50_ms'])} p95={_format_duration(payload['latency']['p95_ms'])}"
+        ),
         "Rubrics:",
     ]
     for rubric, stats in payload["rubrics"].items():
         lines.append(f"  {rubric}: {stats['passed']}/{stats['total']} ({stats['pass_rate']:.3f})")
+    lines.append("")
     for result in payload["results"]:
-        if not result["passed"]:
-            failed = [name for name, ok in result["rubrics"].items() if not ok]
-            lines.append(f"[FAIL] {result['id']} status={result['status']} failed={', '.join(failed)}")
-    return "\n".join(lines)
+        status = "PASS" if result["passed"] else "FAIL"
+        warnings = ", ".join(result["warnings"]) if result["warnings"] else "none"
+        source_types = ", ".join(result["source_types"]) if result["source_types"] else "none"
+        lines.extend(
+            [
+                f"[{status}] {result['id']} ({result['kind']})",
+                f"  Input: {result['input']}",
+                f"  Expected: {result['expected']} | Actual: {result['actual']}",
+                f"  Duration: {_format_duration(result['duration_ms'])}",
+                f"  Stages: {_format_stages(result['stage_timings'])}",
+                f"  Diagnostics: {_format_diagnostics(result['diagnostics'])}",
+                f"  Rubrics: {_format_rubrics(result['rubrics'])}",
+                f"  Failure reasons: {', '.join(result['failure_reasons']) if result['failure_reasons'] else 'none'}",
+                f"  Warnings: {warnings}",
+                f"  Sources: {source_types}",
+                f"  Output: {_truncate(result['output'], 320)}",
+                "",
+            ]
+        )
+    return "\n".join(lines).rstrip()
+
+
+def _format_duration(duration_ms: int) -> str:
+    return f"{duration_ms / 1000:.2f}s"
+
+
+def _format_stages(stage_timings: dict) -> str:
+    if not stage_timings:
+        return "none"
+    ordered_keys = ("total_ms", "planning_ms", "compose_ms")
+    labels = {
+        "total_ms": "total",
+        "planning_ms": "planning/tool",
+        "compose_ms": "compose",
+    }
+    parts = [
+        f"{labels[key]}={_format_duration(stage_timings[key])}"
+        for key in ordered_keys
+        if key in stage_timings
+    ]
+    return ", ".join(parts) if parts else "none"
+
+
+def _format_diagnostics(diagnostics: dict) -> str:
+    if not diagnostics:
+        return "none"
+    ordered_keys = (
+        "trace_id",
+        "mode",
+        "source_selection_mode",
+        "tool_call_count",
+        "selected_source_count",
+        "verifier_result",
+        "repair_count",
+        "citation_coverage",
+        "fallback_reason",
+        "status_reason",
+        "guideline_retrieval_hits",
+        "input_tokens",
+        "output_tokens",
+        "estimated_input_tokens",
+        "estimated_output_tokens",
+        "estimated_cost_usd",
+        "fact_count",
+        "claim_count",
+        "blocked_claim_count",
+    )
+    parts = [
+        f"{key}={diagnostics[key]}"
+        for key in ordered_keys
+        if key in diagnostics
+    ]
+    return ", ".join(parts) if parts else "none"
+
+
+def _format_rubrics(rubrics: dict[str, bool]) -> str:
+    return ", ".join(f"{name}={'pass' if passed else 'fail'}" for name, passed in rubrics.items())
+
+
+def _truncate(text: str, limit: int) -> str:
+    clean = " ".join(str(text).split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3] + "..."
+
+
+def _redact_phi(text: str) -> str:
+    return " ".join("[redacted-demo-token]" if token.startswith("PHI-W2") else token for token in str(text).split())
 
 
 if __name__ == "__main__":
