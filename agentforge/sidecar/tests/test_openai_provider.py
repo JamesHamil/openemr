@@ -8,8 +8,11 @@ from agentforge_sidecar.openai_provider import (
     ModelResponseSource,
     ModelVerificationResult,
     _fallback_answer_for_plan,
+    _fallback_source_ids_for_plan,
+    _fast_lab_source_ids_for_plan,
     _limit_response,
     _model_verify_and_repair,
+    _plan_needs_lab_augmentation,
     openai_response,
 )
 from agentforge_sidecar.schemas import (
@@ -37,8 +40,10 @@ class _Parsed:
 class _FakeResponses:
     def __init__(self, outputs):
         self.outputs = list(outputs)
+        self.parse_calls = []
 
-    def parse(self, **_kwargs):
+    def parse(self, **kwargs):
+        self.parse_calls.append(kwargs)
         output = self.outputs.pop(0)
         if isinstance(output, tuple):
             parsed, input_tokens, output_tokens = output
@@ -250,6 +255,66 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.tool_call_count, 1)
         self.assertEqual(diagnostics.planning_latency_ms, 123)
 
+    def test_openai_response_uses_fast_lab_path_for_extracted_lab_facts(self):
+        request = _request().model_copy(update={"message": "How are this patient's CBC labs?"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="document-fact-51",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Manual Absolute Neutrophil Count",
+                        value="Manual Absolute Neutrophil Count; 1.14; abnormal Low",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-50",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Undifferentiated Blasts",
+                        value="Undifferentiated Blasts; 5; abnormal High",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-49",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Promyelocytes",
+                        value="Promyelocytes; 3; abnormal High",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-54",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Interpretation",
+                        value="Interpretation; Abnormal lymphocytes are present.",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(response.verification_status, "verified")
+        self.assertGreaterEqual(len(response.claims), 4)
+        self.assertIn("Manual Absolute Neutrophil Count", response.answer)
+        self.assertEqual(diagnostics.source_selection_mode, "fast_lab_path")
+        self.assertEqual(diagnostics.tool_call_count, 0)
+        self.assertEqual(diagnostics.planning_latency_ms, 0)
+        self.assertEqual(diagnostics.compose_latency_ms, 0)
+        self.assertEqual(diagnostics.verifier_result, "code_generated")
+
     def test_model_verifier_repair_loop_returns_repaired_response(self):
         request = _request()
         repaired = _response("Documented allergies: eggs; verify reaction severity. [allergy-1]")
@@ -300,6 +365,54 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertIn("labs", answer)
         self.assertIn("recent notes", answer)
         self.assertIn("confirm in chart", answer)
+
+    def test_lab_plan_augments_thin_model_selection_with_document_facts(self):
+        request = _request().model_copy(update={"message": "How are this patient's labs?"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="document-fact-54",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Interpretation",
+                        value="Interpretation; Abnormal lymphocytes are present; consider chronic lymphocytic leukemia.",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-51",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Manual Absolute Neutrophil Count",
+                        value="Manual Absolute Neutrophil Count; 1.14; abnormal Low",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-42",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Platelet Count",
+                        value="Platelet Count; 52; abnormal Low",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-41",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.Leukocytes",
+                        value="Leukocytes; 10.4; abnormal High",
+                        metadata={"document_type": "lab_pdf"},
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        plan = plan_evidence(request)
+
+        self.assertTrue(_plan_needs_lab_augmentation(plan, [bundle.sources[0]]))
+        self.assertGreaterEqual(len(_fallback_source_ids_for_plan(request, plan)), 4)
+        self.assertGreaterEqual(len(_fast_lab_source_ids_for_plan(request, plan)), 4)
 
 
 if __name__ == "__main__":

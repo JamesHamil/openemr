@@ -11,6 +11,32 @@ MAX_TOOL_RESULTS = 8
 MAX_SELECTED_SOURCES = 10
 
 FALLBACK_RECORD_TYPE_ORDER = ["problem", "allergy", "medication", "lab", "document_fact", "guideline", "vital", "note", "demographic"]
+LAB_DOCUMENT_FACT_HINTS = {
+    "a1c",
+    "blast",
+    "blood count",
+    "bun",
+    "cbc",
+    "chloride",
+    "creatinine",
+    "differential",
+    "eosinophil",
+    "erythrocyte",
+    "glucose",
+    "hematocrit",
+    "hemoglobin",
+    "leukocyte",
+    "lymphocyte",
+    "mcv",
+    "metamyelocyte",
+    "monocyte",
+    "neutrophil",
+    "platelet",
+    "potassium",
+    "promyelocyte",
+    "sodium",
+    "wbc",
+}
 SEMANTIC_TYPE_HINTS = {
     "problem": {
         "problem",
@@ -356,8 +382,11 @@ def search_sources(
                 score += 3
         if source.record_type.lower() in hinted_types:
             score += 4
-        if source.record_type.lower() == "document_fact" and "lab_pdf" in metadata_text.lower() and "lab" in hinted_types:
-            score += 5
+        if source.record_type.lower() == "document_fact" and "lab" in hinted_types:
+            if _is_lab_document_fact(source, metadata_text):
+                score += 8
+            elif "lab_pdf" in metadata_text.lower():
+                score += 1
         if score == 0 and not query_terms:
             score = 1
         if score > 0:
@@ -511,7 +540,7 @@ def _keywords(text: str) -> list[str]:
     }
     words = []
     for token in text.split():
-        word = token.strip(".,:;()[]{}'\"").lower()
+        word = token.strip(".,:;!?()[]{}'\"").lower()
         if len(word) < 3 or word in stop:
             continue
         words.append(word)
@@ -534,6 +563,11 @@ def _expand_record_types(record_types: list[str]) -> list[str]:
     if "lab" in expanded:
         expanded.add("document_fact")
     return sorted(expanded)
+
+
+def _is_lab_document_fact(source: EvidenceSource, metadata_text: str = "") -> bool:
+    haystack = f"{source.field_path} {source.value} {source.note_span or ''} {metadata_text}".lower()
+    return any(term in haystack for term in LAB_DOCUMENT_FACT_HINTS)
 
 
 def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit: int) -> list[EvidenceSource]:

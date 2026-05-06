@@ -32,8 +32,8 @@ class AgentForgeEvidenceCollector
         $this->collectAdapter('recent_notes', function () use ($pid, &$sources, &$statuses): void {
             $this->collectNotes($pid, $sources, $statuses);
         }, $statuses);
-        $this->collectAdapter('agentforge_documents', function () use ($pid, &$sources, &$statuses): void {
-            $this->collectExtractedDocumentFacts($pid, $sources, $statuses);
+        $this->collectAdapter('agentforge_documents', function () use ($pid, $message, &$sources, &$statuses): void {
+            $this->collectExtractedDocumentFacts($pid, $message, $sources, $statuses);
         }, $statuses);
 
         return [
@@ -314,10 +314,10 @@ class AgentForgeEvidenceCollector
             : $this->status('recent_notes', 'success');
     }
 
-    private function collectExtractedDocumentFacts(string $pid, array &$sources, array &$statuses): void
+    private function collectExtractedDocumentFacts(string $pid, string $message, array &$sources, array &$statuses): void
     {
         $store = new AgentForgeDocumentStore();
-        $documentSources = $store->recentFactSources($pid, 12);
+        $documentSources = $store->recentFactSources($pid, 24, $message);
         foreach ($documentSources as $source) {
             $sources[] = $source;
         }

@@ -97,6 +97,85 @@ function tagProcedure() {
 	document.forms['procedure_tag'].submit();
 }
 
+function clearAgentForgeExtractionPreview() {
+    $('#agentforgeFactTableBody').empty();
+    $('#agentforgeFactJson').text('');
+    $('#agentforgeFactEmpty').removeClass('d-none');
+    $('#agentforgeFactPreview').addClass('d-none');
+}
+
+function renderAgentForgeExtractionPreview(payload) {
+    let extraction = payload.extraction || {};
+    let facts = extraction.extracted_facts || [];
+    let tableBody = $('#agentforgeFactTableBody');
+    let factJson = $('#agentforgeFactJson');
+    tableBody.empty();
+    factJson.text(JSON.stringify({
+        document: payload.document || {},
+        extraction_status: extraction.extraction_status || 'unknown',
+        extracted_facts: facts,
+        warnings: extraction.warnings || [],
+        worker_handoffs: extraction.worker_handoffs || [],
+        trace_id: extraction.trace_id || ''
+    }, null, 2));
+
+    if (!facts.length) {
+        $('#agentforgeFactPreview').removeClass('d-none');
+        $('#agentforgeFactEmpty').removeClass('d-none');
+        return;
+    }
+
+    $('#agentforgeFactPreview').removeClass('d-none');
+    $('#agentforgeFactEmpty').addClass('d-none');
+    facts.forEach(function (fact, index) {
+        let citation = fact.citation || {};
+        let row = $('<tr></tr>');
+        $('<td class="text-muted"></td>').text(index + 1).appendTo(row);
+        $('<td></td>').text(fact.label || fact.fact_type || 'Document fact').appendTo(row);
+        $('<td></td>').text(formatAgentForgeFactValue(fact)).appendTo(row);
+        $('<td></td>').text(fact.abnormal_flag || '').appendTo(row);
+        $('<td></td>').text(formatAgentForgeConfidence(fact.confidence)).appendTo(row);
+        $('<td class="agentforge-citation-cell"></td>').text(formatAgentForgeCitation(citation)).appendTo(row);
+        tableBody.append(row);
+    });
+}
+
+function formatAgentForgeFactValue(fact) {
+    let parts = [];
+    if (fact.value) {
+        parts.push(fact.value);
+    }
+    if (fact.unit) {
+        parts.push(fact.unit);
+    }
+    if (fact.reference_range) {
+        parts.push('range ' + fact.reference_range);
+    }
+    return parts.join(' ');
+}
+
+function formatAgentForgeConfidence(confidence) {
+    let numeric = Number(confidence);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return '';
+    }
+    return Math.round(numeric * 100) + '%';
+}
+
+function formatAgentForgeCitation(citation) {
+    let parts = [];
+    if (citation.page_or_section) {
+        parts.push(citation.page_or_section);
+    }
+    if (citation.field_or_chunk_id) {
+        parts.push(citation.field_or_chunk_id);
+    }
+    if (citation.quote_or_value) {
+        parts.push('"' + citation.quote_or_value + '"');
+    }
+    return parts.join(' | ');
+}
+
 function extractWithAgentForge(docid, patientId) {
     if (top && typeof top.restoreSession === 'function') {
         top.restoreSession();
@@ -111,6 +190,7 @@ function extractWithAgentForge(docid, patientId) {
 
     button.prop('disabled', true);
     status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Extracting document evidence...'});
+    clearAgentForgeExtractionPreview();
 
     let requestOptions = new Object();
     requestOptions.method = 'POST';
@@ -125,6 +205,7 @@ function extractWithAgentForge(docid, patientId) {
             status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='AgentForge extraction failed.'});
             return;
         }
+        renderAgentForgeExtractionPreview(payload);
         let extraction = payload.extraction || {};
         let facts = extraction.extracted_facts || [];
         let traceId = extraction.trace_id || '';
@@ -143,30 +224,239 @@ function extractWithAgentForge(docid, patientId) {
 }
 </script>
 
+<style>
+{literal}
+.agentforge-doc-header {
+    background: var(--white);
+    border: 1px solid var(--gray300);
+    border-radius: 6px;
+    margin-bottom: 0.75rem;
+    padding: 0.75rem;
+}
+
+.agentforge-doc-title-row {
+    align-items: flex-start;
+    border-bottom: 1px solid var(--gray300);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    justify-content: space-between;
+    margin-bottom: 0.65rem;
+    padding-bottom: 0.65rem;
+}
+
+.agentforge-doc-title {
+    font-size: 1.15rem;
+    font-weight: 600;
+    line-height: 1.25;
+    margin: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+.agentforge-doc-tabs {
+    flex: 0 0 auto;
+}
+
+.agentforge-doc-toolbar,
+.agentforge-action-group {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+}
+
+.agentforge-doc-toolbar {
+    justify-content: space-between;
+}
+
+.agentforge-extract-actions {
+    background: var(--gray100);
+    border: 1px solid var(--gray300);
+    border-radius: 6px;
+    padding: 0.4rem;
+}
+
+.agentforge-extract-actions label {
+    color: var(--gray700);
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin: 0 0.2rem 0 0;
+}
+
+.agentforge-doc-toolbar .btn {
+    font-size: 0.875rem;
+    line-height: 1.2;
+    padding: 0.32rem 0.6rem;
+}
+
+#agentforgeDocumentType {
+    min-width: 8rem;
+    width: auto;
+}
+
+#agentforgeExtractStatus {
+    margin-top: 0.5rem;
+    min-height: 1.25rem;
+    overflow-wrap: anywhere;
+}
+
+.agentforge-fact-preview {
+    border-top: 1px solid var(--gray300);
+    margin-top: 0.65rem;
+    padding-top: 0.65rem;
+}
+
+.agentforge-fact-preview-header {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    justify-content: space-between;
+    margin-bottom: 0.4rem;
+}
+
+.agentforge-fact-preview-title {
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.agentforge-fact-table-wrap {
+    border: 1px solid var(--gray300);
+    border-radius: 4px;
+    max-height: 260px;
+    overflow: auto;
+}
+
+.agentforge-fact-table {
+    font-size: 0.82rem;
+    margin-bottom: 0;
+    min-width: 820px;
+}
+
+.agentforge-fact-table td,
+.agentforge-fact-table th {
+    vertical-align: top;
+}
+
+.agentforge-fact-table th {
+    background: var(--gray100);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+}
+
+.agentforge-citation-cell {
+    color: var(--gray600);
+    min-width: 18rem;
+    overflow-wrap: anywhere;
+}
+
+.agentforge-json-panel {
+    margin-top: 0.5rem;
+}
+
+.agentforge-json-panel summary {
+    color: var(--gray700);
+    cursor: pointer;
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.agentforge-json-panel pre {
+    background: var(--gray100);
+    border: 1px solid var(--gray300);
+    border-radius: 4px;
+    font-size: 0.75rem;
+    margin-top: 0.35rem;
+    max-height: 260px;
+    overflow: auto;
+    padding: 0.55rem;
+    white-space: pre-wrap;
+}
+
+#DocContents embed,
+#DocContents iframe {
+    background: #202020;
+    border: 0;
+    min-height: 72vh;
+    width: 100%;
+}
+
+@media (max-width: 760px) {
+    .agentforge-doc-toolbar {
+        align-items: stretch;
+    }
+
+    .agentforge-action-group,
+    .agentforge-extract-actions {
+        width: 100%;
+    }
+
+    .agentforge-action-group .btn {
+        flex: 1 1 auto;
+    }
+}
+{/literal}
+</style>
+
 <table class="w-100 align-top">
     <tr>
         <td>
-            <div style="margin-bottom: 6px; padding-bottom: 6px; border-bottom: 3px solid var(--gray);">
-            <h4>{$file->get_name()|text}
-              <div class="btn-group btn-toggle">
+            <div class="agentforge-doc-header">
+            <div class="agentforge-doc-title-row">
+              <h4 class="agentforge-doc-title">{$file->get_name()|text}</h4>
+              <div class="btn-group btn-toggle agentforge-doc-tabs">
                 <button class="btn btn-sm btn-secondary properties">{xlt t='Properties'}</button>
                 <button class="btn btn-sm btn-primary active">{xlt t='Contents'}</button>
               </div>
-            <span class="float-right">
+            </div>
             <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};</script>
-            {dispatchPatientDocumentEvent event="actions_render_fax_anchor"}
-            <select id="agentforgeDocumentType" class="form-control form-control-sm d-inline-block w-auto align-middle" aria-label="{xla t='AgentForge document type'}">
-              <option value="lab_pdf">{xlt t='Lab PDF'}</option>
-              <option value="intake_form">{xlt t='Intake Form'}</option>
-            </select>
-            <button id="agentforgeExtractButton" type="button" class="btn btn-primary" onclick="extractWithAgentForge({$file->get_id()|attr_js}, {$file->get_foreign_id()|attr_js}); return false;">{xlt t='Extract with AgentForge'}</button>
-            <a class="btn btn-primary" href='' onclick='return popoutcontent(this)' title="{xla t='Pop Out Full Screen.'}">{xlt t='Pop Out'}</a>
-            <a class="btn btn-primary" href="{$web_path|attr}" title="{xla t='Original file'}" onclick="top.restoreSession()">{xlt t='Download'}</a>
-            <a class="btn btn-primary" href='' onclick='return showpnotes({$file->get_id()|attr_js})'>{xlt t='Show Notes'}</a>
-            {$delete_string}
-            </span>
-            </h4>
+            <div class="agentforge-doc-toolbar">
+              <div class="agentforge-action-group agentforge-extract-actions">
+                <label for="agentforgeDocumentType">{xlt t='AgentForge'}</label>
+                <select id="agentforgeDocumentType" class="form-control form-control-sm d-inline-block align-middle" aria-label="{xla t='AgentForge document type'}">
+                  <option value="lab_pdf">{xlt t='Lab PDF'}</option>
+                  <option value="intake_form">{xlt t='Intake Form'}</option>
+                </select>
+                <button id="agentforgeExtractButton" type="button" class="btn btn-primary btn-sm" onclick="extractWithAgentForge({$file->get_id()|attr_js}, {$file->get_foreign_id()|attr_js}); return false;">{xlt t='Extract'}</button>
+              </div>
+              <div class="agentforge-action-group agentforge-native-actions">
+                {dispatchPatientDocumentEvent event="actions_render_fax_anchor"}
+                <a class="btn btn-secondary btn-sm" href='' onclick='return popoutcontent(this)' title="{xla t='Pop Out Full Screen.'}">{xlt t='Pop Out'}</a>
+                <a class="btn btn-secondary btn-sm" href="{$web_path|attr}" title="{xla t='Original file'}" onclick="top.restoreSession()">{xlt t='Download'}</a>
+                <a class="btn btn-secondary btn-sm" href='' onclick='return showpnotes({$file->get_id()|attr_js})'>{xlt t='Show Notes'}</a>
+                {$delete_string}
+              </div>
+            </div>
             <div id="agentforgeExtractStatus" class="text-muted small"></div>
+            <div id="agentforgeFactPreview" class="agentforge-fact-preview d-none">
+              <div class="agentforge-fact-preview-header">
+                <h5 class="agentforge-fact-preview-title">{xlt t='Extracted Structured Facts'}</h5>
+                <span class="text-muted small">{xlt t='These facts are stored as AgentForge document evidence.'}</span>
+              </div>
+              <div id="agentforgeFactEmpty" class="alert alert-warning py-2 d-none">{xlt t='No structured facts were returned for this extraction.'}</div>
+              <div class="agentforge-fact-table-wrap">
+                <table class="table table-sm table-striped agentforge-fact-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">#</th>
+                      <th scope="col">{xlt t='Fact'}</th>
+                      <th scope="col">{xlt t='Value'}</th>
+                      <th scope="col">{xlt t='Flag'}</th>
+                      <th scope="col">{xlt t='Confidence'}</th>
+                      <th scope="col">{xlt t='Citation'}</th>
+                    </tr>
+                  </thead>
+                  <tbody id="agentforgeFactTableBody"></tbody>
+                </table>
+              </div>
+              <details class="agentforge-json-panel">
+                <summary>{xlt t='Raw extraction JSON'}</summary>
+                <pre id="agentforgeFactJson"></pre>
+              </details>
+            </div>
             </div>
         </td>
     </tr>

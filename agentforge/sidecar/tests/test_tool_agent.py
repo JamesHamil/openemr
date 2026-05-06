@@ -213,6 +213,45 @@ class ToolAgentTest(unittest.TestCase):
         self.assertEqual(matches[0]["record_type"], "document_fact")
         self.assertEqual(matches[0]["id"], "document-fact-23")
 
+    def test_search_sources_lab_focus_prefers_lab_facts_over_newer_form_facts(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={
+                        "sources": [
+                            EvidenceSource(
+                                id="document-fact-intake-name",
+                                record_type="document_fact",
+                                recorded_at="2026-04-30T09:00:00Z",
+                                field_path="agentforge_extracted_facts.Name",
+                                value="Name; Jordan M. Rivera",
+                                metadata={
+                                    "document_type": "lab_pdf",
+                                    "filename": "filled_patient_intake_form_dummy.pdf",
+                                },
+                            ),
+                            EvidenceSource(
+                                id="document-fact-cbc-platelets",
+                                record_type="document_fact",
+                                recorded_at="2026-04-30T08:00:00Z",
+                                field_path="agentforge_extracted_facts.Platelet Count",
+                                value="Platelet Count; 52; abnormal Low",
+                                metadata={
+                                    "document_type": "lab_pdf",
+                                    "filename": "9109 Abn Sample Report 20180503 CBC with Differential Blood.pdf",
+                                },
+                            ),
+                        ]
+                    }
+                )
+            }
+        )
+
+        matches = search_sources(request, "How are this patient's labs?", ["lab"], 5)
+
+        self.assertTrue(matches)
+        self.assertEqual(matches[0]["id"], "document-fact-cbc-platelets")
+
     def test_summarize_by_type_returns_counts_and_representative_sources(self):
         request = _request().model_copy(
             update={

@@ -134,16 +134,27 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
         )
     try:
         client = OpenAI()
-        source_selection_mode = (
-            "planner"
-            if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
-            else "model_tool_phase"
-        )
+        fast_lab_source_ids = _fast_lab_source_ids_for_plan(request, evidence_plan)
+        if fast_lab_source_ids:
+            source_selection_mode = "fast_lab_path"
+            selected_source_ids = fast_lab_source_ids
+            tool_plan = _source_ids_tool_phase_result(
+                request,
+                selected_source_ids,
+                "Deterministic lab fast path selected extracted lab evidence.",
+            )
+            tool_diag = ToolPhaseDiagnostics()
+        else:
+            source_selection_mode = (
+                "planner"
+                if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
+                else "model_tool_phase"
+            )
         if source_selection_mode == "planner":
             tool_plan = _planner_tool_phase_result(request, evidence_plan)
             tool_diag = ToolPhaseDiagnostics()
             selected_source_ids = list(evidence_plan.selected_source_ids)
-        else:
+        elif source_selection_mode == "model_tool_phase":
             with generation_observation(
                 "agentforge.tool_phase",
                 settings,
@@ -179,12 +190,14 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                     },
                 )
         selected_sources = _selected_sources(request, selected_source_ids)
-        if not selected_sources:
-            fallback_source_ids = _fallback_source_ids_for_plan(request, evidence_plan)
-            if fallback_source_ids:
-                selected_source_ids = fallback_source_ids
-                selected_sources = _selected_sources(request, selected_source_ids)
-                source_selection_mode = f"{source_selection_mode}+deterministic_fallback"
+        fallback_source_ids = _fallback_source_ids_for_plan(request, evidence_plan)
+        if fallback_source_ids and (
+            not selected_sources
+            or _plan_needs_lab_augmentation(evidence_plan, selected_sources)
+        ):
+            selected_source_ids = _merge_source_ids(selected_source_ids, fallback_source_ids)
+            selected_sources = _selected_sources(request, selected_source_ids)
+            source_selection_mode = f"{source_selection_mode}+deterministic_fallback"
         if not selected_sources:
             warnings = []
             reason = tool_diag.fallback_reason or "no_supporting_evidence_selected"
@@ -216,6 +229,22 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 source_selection_mode=source_selection_mode,
                 input_tokens=tool_diag.input_tokens,
                 output_tokens=tool_diag.output_tokens,
+            )
+            return response, diagnostics
+
+        if source_selection_mode == "fast_lab_path":
+            response = _deterministic_lab_response(selected_sources, trace_id)
+            diagnostics = ProviderDiagnostics(
+                tool_call_count=0,
+                selected_source_count=len(selected_sources),
+                planning_latency_ms=0,
+                compose_latency_ms=0,
+                answer_family=evidence_plan.answer_family,
+                needed_adapters=evidence_plan.needed_adapters,
+                citation_coverage=_code_citation_coverage(response),
+                verifier_result="code_generated",
+                status_reason="fast_lab_path_code_generated",
+                source_selection_mode=source_selection_mode,
             )
             return response, diagnostics
 
@@ -348,14 +377,26 @@ class VerificationMetadata:
 
 
 def _planner_tool_phase_result(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> ToolPhaseResult:
+    return _source_ids_tool_phase_result(
+        request,
+        list(evidence_plan.selected_source_ids),
+        _planner_focus(evidence_plan),
+    )
+
+
+def _source_ids_tool_phase_result(
+    request: AgentForgeRequest,
+    selected_source_ids: list[str] | tuple[str, ...],
+    focus: str,
+) -> ToolPhaseResult:
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     selected_sources = [
         source_by_id[source_id]
-        for source_id in evidence_plan.selected_source_ids
+        for source_id in selected_source_ids
         if source_id in source_by_id
     ][:8]
     return ToolPhaseResult(
-        selected_source_ids=list(evidence_plan.selected_source_ids),
+        selected_source_ids=list(selected_source_ids),
         drafted_claims=[
             ClaimDraft(
                 text=_draft_claim_text(source),
@@ -364,8 +405,15 @@ def _planner_tool_phase_result(request: AgentForgeRequest, evidence_plan: Eviden
             )
             for source in selected_sources
         ],
-        focus=_planner_focus(evidence_plan),
+        focus=focus,
     )
+
+
+def _fast_lab_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
+    if evidence_plan.answer_family != "labs":
+        return []
+    matches = _fallback_source_ids_for_plan(request, evidence_plan)
+    return matches if matches else []
 
 
 def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
@@ -377,6 +425,93 @@ def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: Evi
         for match in matches
         if match.get("record_type") in {"lab", "document_fact"}
     ][:6]
+
+
+def _plan_needs_lab_augmentation(evidence_plan: EvidencePlan, selected_sources: list[EvidenceSource]) -> bool:
+    if evidence_plan.answer_family != "labs" and "labs" not in evidence_plan.needed_adapters:
+        return False
+    lab_like_count = sum(
+        1
+        for source in selected_sources
+        if source.record_type in {"lab", "document_fact"}
+    )
+    return lab_like_count < 4
+
+
+def _deterministic_lab_response(selected_sources: list[EvidenceSource], trace_id: str) -> AgentForgeResponse:
+    lab_sources = [
+        source
+        for source in selected_sources
+        if source.record_type in {"lab", "document_fact"}
+    ][:8]
+    claims = [
+        Claim(
+            id=f"claim-{index}",
+            text=_lab_claim_text(source),
+            claim_type=source.record_type,
+            source_ids=[source.id],
+            support_status="supported",
+        )
+        for index, source in enumerate(lab_sources, start=1)
+    ]
+    source_map = {source.id: source for source in lab_sources}
+    answer_findings = [_lab_answer_phrase(source) for source in lab_sources[:6]]
+    answer = "Retrieved lab evidence shows " + "; ".join(answer_findings) + "."
+    if not answer_findings:
+        answer = "No retrieved lab facts were selected; confirm current laboratory data in the chart."
+
+    section = []
+    if claims:
+        section = [
+            ResponseSection(
+                id="key-laboratory-findings",
+                title="Key Laboratory Findings",
+                claim_ids=[claim.id for claim in claims],
+            )
+        ]
+
+    return AgentForgeResponse(
+        answer=answer,
+        sections=section,
+        claims=claims,
+        sources=[_response_source_from_evidence(source_map[claim.source_ids[0]]) for claim in claims],
+        warnings=[],
+        blocked_claims=[],
+        verification_status="verified",
+        trace_id=trace_id,
+    )
+
+
+def _lab_claim_text(source: EvidenceSource) -> str:
+    return _lab_answer_phrase(source)
+
+
+def _lab_answer_phrase(source: EvidenceSource) -> str:
+    parts = [part.strip() for part in source.value.split(";") if part.strip()]
+    if not parts:
+        return source.value.strip()
+    label = parts[0]
+    value_parts = []
+    unit = ""
+    details = []
+    for part in parts[1:]:
+        normalized = part.strip()
+        if normalized.startswith("unit "):
+            unit = normalized.removeprefix("unit ").strip()
+        elif normalized.startswith("range "):
+            details.append("range " + normalized.removeprefix("range ").strip())
+        elif normalized.startswith("abnormal "):
+            details.append("flag " + normalized.removeprefix("abnormal ").strip())
+        else:
+            value_parts.append(normalized)
+
+    value = "; ".join(value_parts)
+    if unit:
+        value = f"{value} {unit}".strip()
+    phrase = f"{label}: {value}".strip()
+    if details:
+        phrase = phrase + " (" + ", ".join(details) + ")"
+    return phrase
 
 
 def _draft_claim_text(source: EvidenceSource) -> str:

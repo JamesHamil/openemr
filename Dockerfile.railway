@@ -1,10 +1,11 @@
-FROM openemr/openemr:latest
+FROM openemr/openemr@sha256:1d8073d3acfc15b53e771f264b84c0be41a0f0c998f413af39811e1c2e5d8061
 
 LABEL org.opencontainers.image.title="AgentForge OpenEMR Clinical Co-Pilot"
 LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge project checkpoint artifacts from the fork."
 
 RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge
 RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
+RUN mkdir -p /var/www/localhost/htdocs/openemr/templates/documents
 
 COPY docker/railway/sqlconf.php /var/www/localhost/htdocs/openemr/sites/default/sqlconf.php
 COPY README.md AUDIT.md USERS.md ARCHITECTURE.md MVP_SUBMISSION.md PRD.md COST_ANALYSIS.md W2_ARCHITECTURE.md /var/www/localhost/htdocs/openemr/agentforge/
@@ -12,3 +13,4 @@ COPY docs /var/www/localhost/htdocs/openemr/agentforge/docs
 COPY agentforge/contracts /var/www/localhost/htdocs/openemr/agentforge/contracts
 COPY agentforge/evals /var/www/localhost/htdocs/openemr/agentforge/evals
 COPY interface/modules/custom_modules/agentforge /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
+COPY templates/documents/general_view.html /var/www/localhost/htdocs/openemr/templates/documents/general_view.html

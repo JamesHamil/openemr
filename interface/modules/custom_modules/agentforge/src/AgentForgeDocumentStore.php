@@ -139,16 +139,21 @@ class AgentForgeDocumentStore
         );
     }
 
-    public function recentFactSources(string $pid, int $limit = 12): array
+    public function recentFactSources(string $pid, int $limit = 12, string $message = ''): array
     {
         $this->ensureTables();
+        $orderBy = "f.created_at DESC, f.id DESC";
+        if ($this->isLabPrompt($message)) {
+            $labTerms = "hemoglobin|hematocrit|leukocyte|platelet|erythrocyte|mcv|neutrophil|lymphocyte|metamyelocyte|promyelocyte|blast|monocyte|eosinophil|cbc|differential|glucose|creatinine|sodium|potassium|bun|a1c";
+            $orderBy = "CASE WHEN LOWER(CONCAT_WS(' ', f.fact_type, f.label, f.value, d.original_filename)) REGEXP '" . $labTerms . "' THEN 0 ELSE 1 END, " . $orderBy;
+        }
         $result = sqlStatement(
             "SELECT f.id, f.fact_type, f.label, f.value, f.unit, f.reference_range, f.abnormal_flag, f.recorded_at, " .
             "f.confidence, f.citation_json, d.document_type, d.original_filename, d.openemr_document_id, d.created_at " .
             "FROM agentforge_extracted_facts f " .
             "JOIN agentforge_documents d ON d.id = f.agentforge_document_id " .
             "WHERE f.pid = ? " .
-            "ORDER BY f.created_at DESC, f.id DESC LIMIT ?",
+            "ORDER BY " . $orderBy . " LIMIT ?",
             [(int)$pid, $limit]
         );
         $sources = [];
@@ -184,6 +189,17 @@ class AgentForgeDocumentStore
             ];
         }
         return $sources;
+    }
+
+    private function isLabPrompt(string $message): bool
+    {
+        $normalized = strtolower($message);
+        foreach (['lab', 'labs', 'cbc', 'hemoglobin', 'platelet', 'blood count', 'creatinine', 'glucose'] as $term) {
+            if (strpos($normalized, $term) !== false) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public function recentDocuments(string $pid, int $limit = 5): array
