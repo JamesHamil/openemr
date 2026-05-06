@@ -93,6 +93,14 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             max-height: 220px;
             overflow: auto;
         }
+        .agentforge-source-meta {
+            color: var(--gray600, #6c757d);
+            display: block;
+            font-size: 0.85em;
+        }
+        .agentforge-source-link {
+            margin-left: 0.35rem;
+        }
     </style>
 </head>
 <body class="body_top">
@@ -252,19 +260,100 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
                 return;
             }
 
-            const groups = groupBy(items, 'record_type');
-            Object.keys(groups).sort().forEach(function (type) {
+            const groups = (items || []).reduce(function (memo, source) {
+                const group = sourceGroup(source);
+                memo[group] = memo[group] || [];
+                memo[group].push(source);
+                return memo;
+            }, {});
+            ['Patient Chart', 'Extracted Documents', 'Guidelines'].forEach(function (type) {
+                if (!groups[type] || !groups[type].length) {
+                    return;
+                }
                 const groupItem = document.createElement('li');
-                groupItem.textContent = titleize(type);
+                groupItem.textContent = type;
                 const groupList = document.createElement('ul');
                 groups[type].forEach(function (source) {
                     const sourceItem = document.createElement('li');
-                    sourceItem.textContent = source.id + ': ' + source.extracted_value;
+                    const label = document.createElement('span');
+                    label.textContent = source.id + ': ' + source.extracted_value;
+                    sourceItem.appendChild(label);
+                    const documentUrl = documentSourceUrl(source);
+                    if (documentUrl) {
+                        const link = document.createElement('a');
+                        link.className = 'agentforge-source-link';
+                        link.href = documentUrl;
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                        link.textContent = 'open';
+                        sourceItem.appendChild(link);
+                    }
+                    const meta = sourceMetadata(source);
+                    if (meta) {
+                        const metaNode = document.createElement('span');
+                        metaNode.className = 'agentforge-source-meta';
+                        metaNode.textContent = meta;
+                        sourceItem.appendChild(metaNode);
+                    }
                     groupList.appendChild(sourceItem);
                 });
                 groupItem.appendChild(groupList);
                 sources.appendChild(groupItem);
             });
+        }
+
+        function sourceGroup(source) {
+            if (!source) {
+                return 'Patient Chart';
+            }
+            if (source.record_type === 'guideline' || (source.metadata || {}).source_kind === 'guideline') {
+                return 'Guidelines';
+            }
+            if (source.record_type === 'document_fact' || (source.metadata || {}).source_kind === 'document_extraction') {
+                return 'Extracted Documents';
+            }
+            return 'Patient Chart';
+        }
+
+        function parseCitation(source) {
+            const raw = (source.metadata || {}).citation || '';
+            if (!raw) {
+                return {};
+            }
+            try {
+                return JSON.parse(raw);
+            } catch (error) {
+                return {};
+            }
+        }
+
+        function sourceMetadata(source) {
+            const metadata = source.metadata || {};
+            if (sourceGroup(source) === 'Guidelines') {
+                return [metadata.title, metadata.section, metadata.citation_label].filter(Boolean).join(' | ');
+            }
+            if (sourceGroup(source) === 'Extracted Documents') {
+                const citation = parseCitation(source);
+                const parts = [
+                    metadata.filename,
+                    citation.page_or_section,
+                    citation.field_or_chunk_id,
+                    citation.quote_or_value ? '"' + citation.quote_or_value + '"' : ''
+                ].filter(Boolean);
+                return parts.join(' | ');
+            }
+            return source.field_path || '';
+        }
+
+        function documentSourceUrl(source) {
+            const documentId = (source.metadata || {}).openemr_document_id || '';
+            const patientId = document.getElementById('agentforgePatientId').value || '';
+            if (!documentId || !patientId) {
+                return '';
+            }
+            const webroot = <?php echo js_escape($GLOBALS['webroot'] ?? ''); ?>;
+            return webroot + '/controller.php?document&view&patient_id=' +
+                encodeURIComponent(patientId) + '&doc_id=' + encodeURIComponent(documentId);
         }
 
         function renderTrace(payload) {
@@ -276,6 +365,11 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             body.textContent = payload.trace_id || '';
             details.appendChild(summary);
             details.appendChild(body);
+            if (payload.debug_trace) {
+                const debug = document.createElement('pre');
+                debug.textContent = JSON.stringify(payload.debug_trace, null, 2);
+                details.appendChild(debug);
+            }
             trace.appendChild(details);
         }
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -23,6 +24,21 @@ from .schemas import (
 )
 from .settings import Settings
 from .tool_agent import ToolPhaseDiagnostics, _usage_tokens, run_tool_phase, search_sources
+
+
+PHONE_FIELD_LABELS = {
+    "phone": "Patient phone",
+    "patient_phone": "Patient phone",
+    "emergency_contact_phone": "Emergency contact phone",
+    "pharmacy_phone": "Pharmacy phone",
+}
+PHONE_FIELD_ORDER = {
+    "phone": 0,
+    "patient_phone": 0,
+    "emergency_contact_phone": 1,
+    "pharmacy_phone": 2,
+}
+PHONE_PATTERN = re.compile(r"(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}")
 
 
 COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist preparing for rounds.
@@ -121,6 +137,42 @@ class ProviderDiagnostics:
 def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
     model = settings.model
     evidence_plan = plan_evidence(request)
+    fast_lab_source_ids = _fast_lab_source_ids_for_plan(request, evidence_plan)
+    if fast_lab_source_ids:
+        selected_sources = _selected_sources(request, fast_lab_source_ids)
+        response = _deterministic_lab_response(selected_sources, trace_id)
+        diagnostics = ProviderDiagnostics(
+            tool_call_count=0,
+            selected_source_count=len(selected_sources),
+            planning_latency_ms=0,
+            compose_latency_ms=0,
+            answer_family=evidence_plan.answer_family,
+            needed_adapters=evidence_plan.needed_adapters,
+            citation_coverage=_code_citation_coverage(response),
+            verifier_result="code_generated",
+            status_reason="fast_lab_path_code_generated",
+            source_selection_mode="fast_lab_path",
+        )
+        return response, diagnostics
+
+    fast_phone_source_ids = _fast_phone_source_ids_for_question(request)
+    if fast_phone_source_ids:
+        selected_sources = _selected_sources(request, fast_phone_source_ids)
+        response = _deterministic_phone_response(selected_sources, trace_id)
+        diagnostics = ProviderDiagnostics(
+            tool_call_count=0,
+            selected_source_count=len(selected_sources),
+            planning_latency_ms=0,
+            compose_latency_ms=0,
+            answer_family=evidence_plan.answer_family,
+            needed_adapters=evidence_plan.needed_adapters,
+            citation_coverage=_code_citation_coverage(response),
+            verifier_result="code_generated",
+            status_reason="fast_phone_path_code_generated",
+            source_selection_mode="fast_phone_path",
+        )
+        return response, diagnostics
+
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover - depends on runtime dependency
@@ -131,25 +183,14 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             warning_message=f"OpenAI real mode is not available in this runtime: {exc}",
             fallback_reason="openai_runtime_unavailable",
             evidence_plan=evidence_plan,
-        )
+    )
     try:
         client = OpenAI()
-        fast_lab_source_ids = _fast_lab_source_ids_for_plan(request, evidence_plan)
-        if fast_lab_source_ids:
-            source_selection_mode = "fast_lab_path"
-            selected_source_ids = fast_lab_source_ids
-            tool_plan = _source_ids_tool_phase_result(
-                request,
-                selected_source_ids,
-                "Deterministic lab fast path selected extracted lab evidence.",
-            )
-            tool_diag = ToolPhaseDiagnostics()
-        else:
-            source_selection_mode = (
-                "planner"
-                if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
-                else "model_tool_phase"
-            )
+        source_selection_mode = (
+            "planner"
+            if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
+            else "model_tool_phase"
+        )
         if source_selection_mode == "planner":
             tool_plan = _planner_tool_phase_result(request, evidence_plan)
             tool_diag = ToolPhaseDiagnostics()
@@ -229,22 +270,6 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 source_selection_mode=source_selection_mode,
                 input_tokens=tool_diag.input_tokens,
                 output_tokens=tool_diag.output_tokens,
-            )
-            return response, diagnostics
-
-        if source_selection_mode == "fast_lab_path":
-            response = _deterministic_lab_response(selected_sources, trace_id)
-            diagnostics = ProviderDiagnostics(
-                tool_call_count=0,
-                selected_source_count=len(selected_sources),
-                planning_latency_ms=0,
-                compose_latency_ms=0,
-                answer_family=evidence_plan.answer_family,
-                needed_adapters=evidence_plan.needed_adapters,
-                citation_coverage=_code_citation_coverage(response),
-                verifier_result="code_generated",
-                status_reason="fast_lab_path_code_generated",
-                source_selection_mode=source_selection_mode,
             )
             return response, diagnostics
 
@@ -438,6 +463,53 @@ def _plan_needs_lab_augmentation(evidence_plan: EvidencePlan, selected_sources: 
     return lab_like_count < 4
 
 
+def _fast_phone_source_ids_for_question(request: AgentForgeRequest) -> list[str]:
+    if not _is_phone_number_question(request.message):
+        return []
+    matches = [
+        source
+        for source in request.evidence_bundle.sources
+        if _is_relevant_phone_source(request.message, source)
+    ]
+    matches.sort(key=_phone_source_sort_key)
+    return [source.id for source in matches[:6]]
+
+
+def _is_phone_number_question(message: str) -> bool:
+    normalized = message.lower()
+    if "phone" not in normalized and "contact number" not in normalized:
+        return False
+    return any(term in normalized for term in ("all", "number", "numbers", "intake", "form", "contact", "pharmacy"))
+
+
+def _is_relevant_phone_source(message: str, source: EvidenceSource) -> bool:
+    if source.record_type != "document_fact":
+        return False
+    normalized_message = message.lower()
+    if ("intake" in normalized_message or "form" in normalized_message) and source.metadata.get("document_type") not in {
+        "intake_form",
+        "",
+    }:
+        return False
+    field_id = _citation_field_id(source)
+    if field_id in PHONE_FIELD_LABELS:
+        return True
+    haystack = " ".join(
+        [
+            source.field_path,
+            source.value,
+            source.note_span or "",
+            " ".join(str(value) for value in source.metadata.values()),
+        ]
+    ).lower()
+    return "phone" in haystack and PHONE_PATTERN.search(haystack) is not None
+
+
+def _phone_source_sort_key(source: EvidenceSource) -> tuple[int, str, str]:
+    field_id = _citation_field_id(source)
+    return (PHONE_FIELD_ORDER.get(field_id, 9), source.recorded_at, source.id)
+
+
 def _deterministic_lab_response(selected_sources: list[EvidenceSource], trace_id: str) -> AgentForgeResponse:
     lab_sources = [
         source
@@ -480,6 +552,73 @@ def _deterministic_lab_response(selected_sources: list[EvidenceSource], trace_id
         verification_status="verified",
         trace_id=trace_id,
     )
+
+
+def _deterministic_phone_response(selected_sources: list[EvidenceSource], trace_id: str) -> AgentForgeResponse:
+    phone_sources = [
+        source
+        for source in selected_sources
+        if source.record_type == "document_fact"
+    ][:6]
+    claims = [
+        Claim(
+            id=f"claim-{index}",
+            text=f"{_phone_label_for_source(source)} is {_phone_value_for_source(source)}.",
+            claim_type="document_fact",
+            source_ids=[source.id],
+            support_status="supported",
+        )
+        for index, source in enumerate(phone_sources, start=1)
+    ]
+    findings = [
+        f"{_phone_label_for_source(source)} {_phone_value_for_source(source)} [{source.id}]"
+        for source in phone_sources
+    ]
+    if findings:
+        answer = f"The intake form includes {len(findings)} phone number"
+        answer += "" if len(findings) == 1 else "s"
+        answer += ": " + "; ".join(findings) + "."
+    else:
+        answer = "No retrieved phone number facts were selected from the intake form; confirm in the document."
+
+    sections = []
+    if claims:
+        sections = [
+            ResponseSection(
+                id="phone-numbers",
+                title="Phone Numbers",
+                claim_ids=[claim.id for claim in claims],
+            )
+        ]
+
+    return AgentForgeResponse(
+        answer=answer,
+        sections=sections,
+        claims=claims,
+        sources=[_response_source_from_evidence(source) for source in phone_sources],
+        warnings=[],
+        blocked_claims=[],
+        verification_status="verified",
+        trace_id=trace_id,
+    )
+
+
+def _phone_label_for_source(source: EvidenceSource) -> str:
+    field_id = _citation_field_id(source)
+    if field_id in PHONE_FIELD_LABELS:
+        return PHONE_FIELD_LABELS[field_id]
+    first_part = source.value.split(";", 1)[0].strip()
+    return first_part if first_part else "Phone"
+
+
+def _phone_value_for_source(source: EvidenceSource) -> str:
+    match = PHONE_PATTERN.search(source.value)
+    if match:
+        return match.group(0)
+    parts = [part.strip() for part in source.value.split(";") if part.strip()]
+    if len(parts) >= 2:
+        return parts[1]
+    return source.value.strip()
 
 
 def _lab_claim_text(source: EvidenceSource) -> str:
@@ -837,15 +976,34 @@ def _plan_payload(plan: EvidencePlan) -> dict:
 def _response_source_from_evidence(source: EvidenceSource) -> ResponseSource:
     status = source.metadata.get("status", "")
     display_prefix = f"{status.title()} " if status else ""
+    extracted_value = source.value
+    if source.record_type == "document_fact" and _citation_field_id(source) in PHONE_FIELD_LABELS:
+        extracted_value = f"{_phone_label_for_source(source)}; {_phone_value_for_source(source)}"
     return ResponseSource(
         id=source.id,
         record_type=source.record_type,
         display=f"{display_prefix}{source.record_type.replace('_', ' ').title()} source",
         recorded_at=source.recorded_at,
         field_path=source.field_path,
-        extracted_value=source.value,
+        extracted_value=extracted_value,
         metadata=source.metadata,
     )
+
+
+def _citation_field_id(source: EvidenceSource) -> str:
+    citation = _citation_payload(source)
+    return str(citation.get("field_or_chunk_id", "")).strip().lower()
+
+
+def _citation_payload(source: EvidenceSource) -> dict:
+    raw = source.metadata.get("citation", "")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _code_citation_coverage(response: AgentForgeResponse) -> float:

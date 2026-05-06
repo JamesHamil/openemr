@@ -41,13 +41,16 @@ Week 2 multimodal expansion:
 - [Week 2 PRD notes](docs/week-2/PRD_NOTES.md): extracted requirement summary and guardrails.
 - [Week 2 eval plan](docs/week-2/EVAL_PLAN.md): 50-case boolean eval gate strategy.
 - [Week 2 cost and latency plan](docs/week-2/COST_LATENCY_PLAN.md): measurement and bottleneck plan.
+- [Week 2 cost and latency report](docs/week-2/COST_LATENCY_REPORT.md): current baseline, live cost drivers, and scale notes.
+- [Week 2 demo checklist](docs/week-2/DEMO_CHECKLIST.md): recording flow for the checkpoint and final submission.
 
 Eval references:
 
 - [agentforge/evals/EVALS.md](agentforge/evals/EVALS.md): eval philosophy, examples, and evals-vs-unit-tests explanation.
 - [agentforge/evals/RESULTS.md](agentforge/evals/RESULTS.md): current eval runner instructions and latest smoke results.
+- [agentforge/evals/week2_cases.json](agentforge/evals/week2_cases.json): visible 50-case Week 2 eval dataset.
 
-The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, and audit logging. The in-repo sidecar architecture handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority. Week 2 keeps this boundary while planning document ingestion, source-cited extraction, guideline retrieval, an inspectable supervisor graph, and eval-driven CI.
+The project architecture keeps OpenEMR as the clinical trust boundary. OpenEMR owns authentication, patient context, authorization, evidence retrieval, document storage, and audit logging. The in-repo sidecar handles AI orchestration and verification in a separate runtime boundary, and the sidecar receives only bounded evidence bundles from OpenEMR rather than direct database credentials or independent chart-retrieval authority. Week 2 keeps this boundary while adding OpenEMR Documents-based ingestion, source-cited extraction, guideline retrieval, an inspectable LangGraph supervisor/worker graph, Langfuse metadata traces, and PR-blocking eval CI.
 
 The first execution slice now includes an OpenEMR custom module shell at `interface/modules/custom_modules/agentforge/`, shared contracts under `agentforge/contracts/`, a FastAPI sidecar under `agentforge/sidecar/`, and eval smoke tests under `agentforge/evals/`. The public Railway OpenEMR deployment remains demo-data-only, with production HIPAA readiness reserved for the compliance gate described in `AUDIT.md`. Real OpenAI mode is enabled only with a server-side `OPENAI_API_KEY` and reviewed configuration.
 
@@ -113,6 +116,8 @@ AGENTFORGE_SIGNING_SECRET=<shared-secret>
 AGENTFORGE_MODE=mock
 OPENAI_API_KEY=<real-mode-only>
 AGENTFORGE_OPENAI_MODEL=gpt-4.1-mini
+AGENTFORGE_LANGFUSE_ENABLED=false
+AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=false
 ```
 
 Use `AGENTFORGE_MODE=mock` for deterministic demos, `real` for OpenAI-backed responses, and `off` for rollback. Browser code never receives the sidecar signing secret or OpenAI API key.

@@ -2,7 +2,7 @@
 
 Testing philosophy and examples are documented in [`EVALS.md`](EVALS.md).
 
-Current default eval target: deterministic sidecar mode and verifier contract. Set `AGENTFORGE_EVAL_MODE=live` to run the same fixtures through real mode with OpenAI credentials.
+Current Week 1 eval target: deterministic sidecar mode and verifier contract. Set `AGENTFORGE_EVAL_MODE=real` to run the same fixtures through OpenAI-backed real mode with server-side credentials.
 
 Run with:
 
@@ -45,6 +45,12 @@ Week 2 multimodal runner:
 PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_week2_evals.py
 ```
 
+Machine-readable Week 2 output:
+
+```shell
+PYTHONPATH=agentforge/sidecar python3 agentforge/evals/run_week2_evals.py --json
+```
+
 Latest Week 2 local run:
 
 ```text
@@ -55,6 +61,11 @@ citation_present: 50/50
 factually_consistent: 50/50
 safe_refusal: 50/50
 no_phi_in_logs: 50/50
+supervisor_route_present: 50/50
+expected_worker_handoff: 50/50
+guideline_metadata_present: 50/50
+p50: 0.00s
+p95: 0.00s
 ```
 
-The runners print JSON summaries with pass/fail status for each case.
+The Week 2 dataset is visible at [`week2_cases.json`](week2_cases.json). The saved regression baseline is [`week2_baseline.json`](week2_baseline.json), and CI fails on failed cases, rubric pass rates below threshold, or more than 5% rubric regression from baseline.

@@ -315,6 +315,77 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.compose_latency_ms, 0)
         self.assertEqual(diagnostics.verifier_result, "code_generated")
 
+    def test_openai_response_uses_fast_phone_path_for_all_intake_phone_numbers(self):
+        request = _request().model_copy(update={"message": "give me all the phone numbers in the intake form"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="document-fact-101",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.demographic",
+                        value="Phone; (217) 555-0198",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"phone","page_or_section":"Patient Information"}',
+                        },
+                    ),
+                    EvidenceSource(
+                        id="document-fact-102",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.demographic",
+                        value="Emergency Contact Phone; (217) 555-0144",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"emergency_contact_phone","page_or_section":"Patient Information"}',
+                        },
+                    ),
+                    EvidenceSource(
+                        id="document-fact-103",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.pharmacy",
+                        value="Phone Number; (217) 555-0160",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"pharmacy_phone","page_or_section":"Pharmacy Information"}',
+                        },
+                    ),
+                    EvidenceSource(
+                        id="document-fact-104",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.email",
+                        value="Email; jordan.rivera@example.com",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"email","page_or_section":"Patient Information"}',
+                        },
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+
+        with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+            response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.source_selection_mode, "fast_phone_path")
+        self.assertEqual(len(response.claims), 3)
+        self.assertIn("Patient phone (217) 555-0198", response.answer)
+        self.assertIn("Emergency contact phone (217) 555-0144", response.answer)
+        self.assertIn("Pharmacy phone (217) 555-0160", response.answer)
+        self.assertEqual(
+            [source.id for source in response.sources],
+            ["document-fact-101", "document-fact-102", "document-fact-103"],
+        )
+        self.assertEqual(response.sources[-1].extracted_value, "Pharmacy phone; (217) 555-0160")
+
     def test_model_verifier_repair_loop_returns_repaired_response(self):
         request = _request()
         repaired = _response("Documented allergies: eggs; verify reaction severity. [allergy-1]")

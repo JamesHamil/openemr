@@ -103,6 +103,7 @@ class AgentForgeResponse(StrictModel):
     blocked_claims: list[str] = Field(default_factory=list)
     verification_status: ResponseStatus
     trace_id: str
+    debug_trace: dict = Field(default_factory=dict)
 
 
 class SourceCitation(StrictModel):
@@ -221,3 +222,8 @@ class TraceRecord(StrictModel):
     valid_blocked_claim_count: int | None = None
     guideline_retrieval_hits: int | None = None
     guideline_rerank_scores: list[float] = Field(default_factory=list)
+    guideline_selected_chunk_ids: list[str] = Field(default_factory=list)
+    guideline_score_details: list[dict] = Field(default_factory=list)
+    supervisor_route: str | None = None
+    graph_nodes: list[str] = Field(default_factory=list)
+    worker_handoffs: list[WorkerHandoff] = Field(default_factory=list)

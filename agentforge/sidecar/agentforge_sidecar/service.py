@@ -3,13 +3,11 @@ from __future__ import annotations
 import time
 import uuid
 
-from .mock_provider import mock_response
+from . import supervisor_graph
 from .observability import chat_observation, update_chat_observation
 from .openai_provider import openai_response
 from .schemas import AgentForgeRequest, AgentForgeResponse, TraceRecord, WarningItem
 from .settings import Settings
-from .guideline_retriever import augment_with_guidelines
-from .verifier import is_treatment_directive, verify_response
 
 
 def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentForgeResponse, TraceRecord]:
@@ -37,68 +35,21 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
 
     with chat_observation(request, settings, trace_id) as chat_span:
         try:
-            if any(
-                status.adapter == "authorization" and status.status == "failed"
-                for status in request.evidence_bundle.adapter_status
-            ):
-                response = AgentForgeResponse(
-                    answer="I cannot answer for an unauthorized patient context.",
-                    sections=[],
-                    claims=[],
-                    sources=[],
-                    warnings=[
-                        WarningItem(
-                            code="unauthorized_patient_refused",
-                            message="OpenEMR did not authorize this patient context.",
-                        )
-                    ],
-                    blocked_claims=[],
-                    verification_status="refused",
-                    trace_id=trace_id,
-                )
-                fallback_reason = "unauthorized_patient_refused"
-            elif is_treatment_directive(request.message):
-                response = AgentForgeResponse(
-                    answer=(
-                        "I cannot provide treatment directives. I can summarize retrieved chart evidence "
-                        "and record-backed issues for physician review."
-                    ),
-                    sections=[],
-                    claims=[],
-                    sources=[],
-                    warnings=[
-                        WarningItem(
-                            code="treatment_directive_refused",
-                            message="The request asked for a treatment action and was reframed for physician review.",
-                        )
-                    ],
-                    blocked_claims=[],
-                    verification_status="refused",
-                    trace_id=trace_id,
-                )
-                fallback_reason = "treatment_directive_refused"
-            elif settings.mode == "off":
-                response = AgentForgeResponse(
-                    answer="Clinical Co-Pilot is currently disabled.",
-                    sections=[],
-                    claims=[],
-                    sources=[],
-                    warnings=[
-                        WarningItem(
-                            code="agentforge_off",
-                            message="The sidecar is configured in off mode.",
-                        )
-                    ],
-                    blocked_claims=[],
-                    verification_status="failed",
-                    trace_id=trace_id,
-                )
-                fallback_reason = "agentforge_off"
-            elif settings.mode == "real":
-                working_request, guideline_diag = augment_with_guidelines(request, settings)
-                guideline_retrieval_hits = guideline_diag["retrieval_hits"]
-                guideline_rerank_scores = guideline_diag["rerank_scores"]
-                response, provider_diagnostics = openai_response(working_request, trace_id, settings)
+            supervisor_graph.openai_response = openai_response
+            graph_result = supervisor_graph.run_chat_graph(request, settings, trace_id)
+            response = graph_result.response
+            working_request = graph_result.working_request
+            guideline_diag = graph_result.guideline_diag
+            guideline_retrieval_hits = guideline_diag.get("retrieval_hits")
+            guideline_rerank_scores = guideline_diag.get("rerank_scores", [])
+            guideline_selected_chunk_ids = guideline_diag.get("selected_chunk_ids", [])
+            guideline_score_details = guideline_diag.get("score_details", [])
+            fallback_reason = graph_result.fallback_reason or fallback_reason
+            supervisor_route = graph_result.supervisor_route
+            graph_nodes = graph_result.graph_nodes
+            worker_handoffs = graph_result.worker_handoffs
+            provider_diagnostics = graph_result.provider_diagnostics
+            if provider_diagnostics is not None:
                 tool_call_count = provider_diagnostics.tool_call_count
                 selected_source_count = provider_diagnostics.selected_source_count
                 fallback_reason = provider_diagnostics.fallback_reason or fallback_reason
@@ -115,16 +66,8 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 valid_blocked_claim_count = getattr(provider_diagnostics, "valid_blocked_claim_count", None)
                 actual_input_tokens = getattr(provider_diagnostics, "input_tokens", None) or None
                 actual_output_tokens = getattr(provider_diagnostics, "output_tokens", None) or None
-            else:
-                working_request, guideline_diag = augment_with_guidelines(request, settings)
-                guideline_retrieval_hits = guideline_diag["retrieval_hits"]
-                guideline_rerank_scores = guideline_diag["rerank_scores"]
-                response = mock_response(working_request, trace_id)
-
-            if response.verification_status not in {"refused", "failed"}:
-                response = verify_response(locals().get("working_request", request), response)
-                if response.verification_status == "partial" and not response.claims and response.blocked_claims:
-                    fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
+            if response.verification_status == "partial" and not response.claims and response.blocked_claims:
+                fallback_reason = fallback_reason or "all_claims_blocked_by_verifier"
         except Exception as exc:
             error = str(exc)
             fallback_reason = fallback_reason or "sidecar_exception"
@@ -175,6 +118,11 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             valid_blocked_claim_count=valid_blocked_claim_count,
             guideline_retrieval_hits=guideline_retrieval_hits,
             guideline_rerank_scores=guideline_rerank_scores,
+            guideline_selected_chunk_ids=locals().get("guideline_selected_chunk_ids", []),
+            guideline_score_details=locals().get("guideline_score_details", []),
+            supervisor_route=locals().get("supervisor_route"),
+            graph_nodes=locals().get("graph_nodes", []),
+            worker_handoffs=locals().get("worker_handoffs", []),
         )
         update_chat_observation(chat_span, response, trace, settings)
     return response, trace

@@ -1,0 +1,19 @@
+{
+  "total_cases": 50,
+  "passed": 50,
+  "failed": 0,
+  "rubrics": {
+    "schema_valid": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "citation_present": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "factually_consistent": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "safe_refusal": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "no_phi_in_logs": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "supervisor_route_present": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "expected_worker_handoff": {"passed": 50, "total": 50, "pass_rate": 1.0},
+    "guideline_metadata_present": {"passed": 50, "total": 50, "pass_rate": 1.0}
+  },
+  "latency": {
+    "p50_ms": 2,
+    "p95_ms": 3
+  }
+}

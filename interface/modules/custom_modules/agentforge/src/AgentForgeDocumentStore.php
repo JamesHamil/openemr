@@ -152,14 +152,17 @@ class AgentForgeDocumentStore
             "f.confidence, f.citation_json, d.document_type, d.original_filename, d.openemr_document_id, d.created_at " .
             "FROM agentforge_extracted_facts f " .
             "JOIN agentforge_documents d ON d.id = f.agentforge_document_id " .
+            "JOIN documents od ON od.id = d.openemr_document_id AND od.foreign_id = f.pid AND od.deleted = 0 " .
             "WHERE f.pid = ? " .
             "ORDER BY " . $orderBy . " LIMIT ?",
             [(int)$pid, $limit]
         );
         $sources = [];
         while ($row = sqlFetchArray($result)) {
+            $citation = json_decode((string)$row['citation_json'], true);
+            $displayLabel = $this->canonicalFactLabel((string)$row['label'], is_array($citation) ? $citation : []);
             $valueParts = [
-                (string)$row['label'],
+                $displayLabel,
                 (string)$row['value'],
             ];
             if (!empty($row['unit'])) {
@@ -171,7 +174,6 @@ class AgentForgeDocumentStore
             if (!empty($row['abnormal_flag'])) {
                 $valueParts[] = 'abnormal ' . (string)$row['abnormal_flag'];
             }
-            $citation = json_decode((string)$row['citation_json'], true);
             $sources[] = [
                 'id' => 'document-fact-' . (string)$row['id'],
                 'record_type' => 'document_fact',
@@ -189,6 +191,20 @@ class AgentForgeDocumentStore
             ];
         }
         return $sources;
+    }
+
+    private function canonicalFactLabel(string $label, array $citation): string
+    {
+        $field = strtolower(trim((string)($citation['field_or_chunk_id'] ?? '')));
+        $labels = [
+            'phone' => 'Patient Phone',
+            'patient_phone' => 'Patient Phone',
+            'emergency_contact_phone' => 'Emergency Contact Phone',
+            'pharmacy_phone' => 'Pharmacy Phone',
+            'address' => 'Patient Address',
+            'pharmacy_address' => 'Pharmacy Address',
+        ];
+        return $labels[$field] ?? $label;
     }
 
     private function isLabPrompt(string $message): bool

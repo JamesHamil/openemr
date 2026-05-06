@@ -104,6 +104,45 @@ def generation_observation(
         _safe_exit(gen_cm, exc_info)
 
 
+@contextmanager
+def graph_node_observation(
+    name: str,
+    settings: Settings,
+    metadata: dict[str, Any] | None = None,
+) -> Iterator[Any | None]:
+    loaded = _load_langfuse(settings)
+    if loaded is None:
+        yield None
+        return
+
+    langfuse, _propagate_attributes = loaded
+    try:
+        span_cm = langfuse.start_as_current_observation(
+            as_type="span",
+            name=name,
+            input=_redacted_payload(metadata or {}),
+            metadata=_redacted_payload(metadata or {}),
+        )
+    except Exception:
+        yield None
+        return
+
+    try:
+        span = span_cm.__enter__()
+    except Exception:
+        yield None
+        return
+
+    exc_info = (None, None, None)
+    try:
+        yield span
+    except BaseException:
+        exc_info = sys.exc_info()
+        raise
+    finally:
+        _safe_exit(span_cm, exc_info)
+
+
 def update_chat_observation(
     observation: Any | None,
     response: AgentForgeResponse,
@@ -148,6 +187,11 @@ def update_chat_observation(
             "source_selection_mode": trace.source_selection_mode or "",
             "stale_blocked_claim_count": trace.stale_blocked_claim_count,
             "valid_blocked_claim_count": trace.valid_blocked_claim_count,
+            "supervisor_route": trace.supervisor_route or "",
+            "graph_nodes": ",".join(trace.graph_nodes),
+            "worker_handoffs": ",".join(handoff.worker for handoff in trace.worker_handoffs),
+            "guideline_selected_chunk_ids": ",".join(trace.guideline_selected_chunk_ids),
+            "guideline_retrieval_hits": trace.guideline_retrieval_hits,
             "error": trace.error,
         },
     )
@@ -165,6 +209,21 @@ def update_generation_observation(
         observation,
         output=output_payload if settings.langfuse_capture_payloads else _redacted_payload(output_payload),
         metadata=metadata or {},
+    )
+
+
+def update_graph_node_observation(
+    observation: Any | None,
+    settings: Settings,
+    output_payload: dict[str, Any],
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    if observation is None:
+        return
+    _safe_update(
+        observation,
+        output=_redacted_payload(output_payload),
+        metadata=_redacted_payload(metadata or {}),
     )
 
 

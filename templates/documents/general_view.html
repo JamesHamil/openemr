@@ -173,6 +173,13 @@ function formatAgentForgeCitation(citation) {
     if (citation.quote_or_value) {
         parts.push('"' + citation.quote_or_value + '"');
     }
+    if (citation.bounding_box) {
+        let box = citation.bounding_box;
+        parts.push('box ' + ['x', 'y', 'width', 'height'].map(function (key) {
+            let value = Number(box[key]);
+            return key + '=' + (Number.isFinite(value) ? value.toFixed(2) : '');
+        }).join(', '));
+    }
     return parts.join(' | ');
 }
 

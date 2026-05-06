@@ -4,7 +4,7 @@
 
 Week 2 expands AgentForge Clinical Co-Pilot from a structured OpenEMR chart-brief assistant into a multimodal evidence agent. Week 1 already established the core safety pattern: OpenEMR owns authentication, patient context, authorization, evidence collection, audit logging, and sidecar request signing; the sidecar transforms a bounded evidence bundle into a source-backed response and verifies claims before display.
 
-The Week 2 architecture keeps that trust boundary intact while adding two carefully scoped capabilities: the agent can read real-world clinical documents, and it can route work across a small, inspectable worker graph. The implementation target is intentionally narrow: one lab PDF, one intake form, one guideline corpus, one supervisor, two workers, and a 50-case eval gate.
+The Week 2 architecture keeps that trust boundary intact while adding two carefully scoped capabilities: the agent can read real-world clinical documents, and it can route work across a small, inspectable LangGraph worker graph. The implementation target is intentionally narrow: one lab PDF, one intake form, one guideline corpus, one supervisor, two required workers, and a 50-case eval gate.
 
 This is not a general medical-document platform. It is a controlled expansion of the Week 1 clinical workflow for a physician preparing for follow-up or rounds: identify what changed, what deserves attention, and which patient-record or guideline source supports the answer.
 
@@ -27,7 +27,7 @@ Week 2 expansion:
 - Add strict extraction schemas with source citation fields.
 - Add visual document citation metadata, including page-relative bounding boxes.
 - Add guideline retrieval with sparse search, dense embeddings, and local rerank.
-- Add a supervisor graph with `intake-extractor` and `evidence-retriever` workers.
+- Add a LangGraph supervisor graph with `intake-extractor` and `evidence-retriever` workers, plus answer and critic/verifier nodes around the existing Week 1 logic.
 - Add a 50-case boolean eval gate that blocks regressions.
 
 The main design constraint is unchanged: the sidecar may transform scoped evidence, but it must not become a second EHR, bypass OpenEMR authorization, or invent clinical facts.
@@ -38,7 +38,7 @@ Document ingestion starts in OpenEMR Documents because OpenEMR is the clinical s
 
 The source file remains stored through OpenEMR’s existing Documents subsystem. The module records an AgentForge document row that links the OpenEMR document ID, patient ID, encounter ID when present, document type, content hash, extraction status, and timestamps. This preserves OpenEMR document integrity and avoids creating a parallel file store.
 
-Derived facts are persisted in module-owned traceable tables for the Week 2 demo rather than being written directly into core clinical tables such as `procedure_result`, `lists`, or `prescriptions`. That tradeoff is deliberate. It makes extracted facts visible, auditable, and citable without pretending they are clinician-entered chart facts or risking duplicate clinical records. A later production version could promote reviewed extracted facts into FHIR resources or OpenEMR records through a clinician-confirmed workflow.
+Derived facts are persisted in module-owned traceable tables for the Week 2 demo rather than being written directly into core clinical tables such as `procedure_result`, `lists`, or `prescriptions`. That tradeoff is deliberate. It makes extracted facts visible, auditable, and citable without pretending they are clinician-entered chart facts or risking duplicate clinical records. Facts are only returned as active evidence while the linked OpenEMR document still exists, belongs to the active patient, and is not deleted. A later production version could promote reviewed extracted facts into FHIR resources or OpenEMR records through a clinician-confirmed workflow.
 
 Supported document types:
 
@@ -111,12 +111,24 @@ Only top grounded guideline snippets are passed to the answer model. The retriev
 
 ## Supervisor And Worker Graph
 
-Week 2 adds a small inspectable graph rather than a broad autonomous agent network. The graph has one supervisor and two workers:
+Week 2 adds a small inspectable LangGraph flow rather than a broad autonomous agent network. The required agent shape has one supervisor and two core workers:
 
 - `intake-extractor`: handles document extraction, strict schema validation, citation metadata, confidence, and extraction warnings.
 - `evidence-retriever`: handles guideline query construction, hybrid retrieval, rerank, and grounded snippet selection.
 
-The supervisor decides whether extraction is needed, whether guideline retrieval is needed, and whether the final answer has enough evidence to proceed. Each handoff records:
+The implemented chat graph is:
+
+```text
+START -> supervisor -> evidence_retriever -> answer_worker -> critic_verifier -> END
+```
+
+The implemented document graph is:
+
+```text
+START -> supervisor -> intake_extractor -> END
+```
+
+The `answer_worker` wraps the existing mock/real answer provider. The `critic_verifier` wraps the existing Week 1 verifier as the final gate. The supervisor handles route decisions, authorization refusal, treatment-directive refusal, and off-mode fallback before model work. Each handoff records:
 
 - route decision;
 - route reason;
@@ -165,15 +177,18 @@ Boolean rubric categories:
 - `citation_present`;
 - `factually_consistent`;
 - `safe_refusal`;
-- `no_phi_in_logs`.
+- `no_phi_in_logs`;
+- `supervisor_route_present`;
+- `expected_worker_handoff`;
+- `guideline_metadata_present`.
 
-The CI or git hook fails if any category drops below its pass threshold or regresses by more than 5% from the saved baseline. This is designed to satisfy the grading gate where a small introduced regression must cause the eval suite to fail.
+The CI workflow at `.github/workflows/agentforge-week2-evals.yml` fails if the suite does not contain exactly 50 cases, if any case fails, if any category drops below its pass threshold, or if any category regresses by more than 5% from the saved baseline. This is designed to satisfy the grading gate where a small introduced regression must cause the eval suite to fail.
 
 The eval output should be machine-readable JSON and human-readable summary text. Each failure should include the case ID, failed rubric category, expected behavior, actual behavior, and trace ID.
 
 ## Observability, Cost, And Latency
 
-Week 2 traces extend the Week 1 trace shape with document and graph metadata:
+Week 2 traces extend the Week 1 trace shape with document and graph metadata. Langfuse remains the external observability system; LangSmith is not used. Payload capture is disabled by default, so the normal trace contains metadata only.
 
 - OpenEMR document retrieval latency;
 - extraction latency;
@@ -188,6 +203,16 @@ Week 2 traces extend the Week 1 trace shape with document and graph metadata:
 - token usage from API usage fields;
 - estimated cost;
 - eval outcome when running evals.
+
+PHI-safe Langfuse spans:
+
+- `agentforge.supervisor`;
+- `agentforge.intake_extractor`;
+- `agentforge.evidence_retriever`;
+- `agentforge.answer_worker`;
+- `agentforge.critic_verifier`.
+
+The UI trace panel exposes the same graph route and worker handoff metadata for demo inspection. Source display is grouped as Patient Chart, Extracted Documents, and Guidelines, with document facts linking back to the OpenEMR document viewer.
 
 Expected bottlenecks are PDF/image extraction, embedding calls, rerank, and final compose/verify. The architecture keeps those bounded by limiting page count, caching guideline embeddings, passing structured extracted facts instead of full document text to the composer, and keeping top-k retrieval small.
 

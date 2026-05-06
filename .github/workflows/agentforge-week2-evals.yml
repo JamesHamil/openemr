@@ -1,0 +1,81 @@
+name: AgentForge Week 2 Evals
+
+on:
+  pull_request:
+    paths:
+      - "agentforge/**"
+      - "interface/modules/custom_modules/agentforge/**"
+      - "templates/documents/general_view.html"
+      - ".github/workflows/agentforge-week2-evals.yml"
+  push:
+    branches:
+      - master
+      - main
+    paths:
+      - "agentforge/**"
+      - "interface/modules/custom_modules/agentforge/**"
+      - "templates/documents/general_view.html"
+      - ".github/workflows/agentforge-week2-evals.yml"
+
+jobs:
+  week2-evals:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install sidecar dependencies
+        run: python -m pip install -r agentforge/sidecar/requirements.txt
+
+      - name: Run sidecar unit tests
+        env:
+          PYTHONPATH: agentforge/sidecar
+          AGENTFORGE_MODE: mock
+          AGENTFORGE_LANGFUSE_ENABLED: "false"
+        run: python -m unittest discover -s agentforge/sidecar/tests
+
+      - name: Run Week 2 evals
+        env:
+          PYTHONPATH: agentforge/sidecar
+          AGENTFORGE_MODE: mock
+          AGENTFORGE_EVAL_MODE: mock
+          AGENTFORGE_LANGFUSE_ENABLED: "false"
+        run: python agentforge/evals/run_week2_evals.py --json > week2-eval-results.json
+
+      - name: Enforce Week 2 eval threshold
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("week2-eval-results.json").read_text())
+          if payload["total_cases"] != 50:
+              raise SystemExit(f"Expected exactly 50 Week 2 cases, found {payload['total_cases']}")
+          if payload["failed"]:
+              raise SystemExit(f"Week 2 eval failures: {payload['failed']}")
+          for rubric, stats in payload["rubrics"].items():
+              if stats["pass_rate"] < 0.95:
+                  raise SystemExit(f"Rubric {rubric} below threshold: {stats['pass_rate']}")
+          baseline_path = Path("agentforge/evals/week2_baseline.json")
+          if baseline_path.exists():
+              baseline = json.loads(baseline_path.read_text())
+              for rubric, stats in payload["rubrics"].items():
+                  old_rate = baseline.get("rubrics", {}).get(rubric, {}).get("pass_rate")
+                  if old_rate is not None and old_rate - stats["pass_rate"] > 0.05:
+                      raise SystemExit(f"Rubric {rubric} regressed by more than 5%: {old_rate} -> {stats['pass_rate']}")
+          print("Week 2 eval gate passed")
+          PY
+
+      - name: Upload eval results
+        uses: actions/upload-artifact@v4
+        with:
+          name: week2-eval-results
+          path: week2-eval-results.json

@@ -28,6 +28,15 @@ Return strict structured facts with citations. For PDF/image inputs, include pag
 bounding boxes when visible; otherwise leave bounding_box null and preserve page/section plus quote_or_value.
 Use low confidence and warnings for uncertain, missing, or unreadable fields."""
 
+CANONICAL_FIELD_LABELS = {
+    "phone": "Patient Phone",
+    "patient_phone": "Patient Phone",
+    "emergency_contact_phone": "Emergency Contact Phone",
+    "pharmacy_phone": "Pharmacy Phone",
+    "address": "Patient Address",
+    "pharmacy_address": "Pharmacy Address",
+}
+
 
 class ModelExtractionResult(StrictModel):
     extraction_status: Literal["success", "partial", "failed"]
@@ -39,34 +48,20 @@ def extract_document(
     request: DocumentExtractionRequest,
     settings: Settings,
 ) -> tuple[DocumentExtractionResponse, dict]:
+    from .supervisor_graph import run_document_extraction_graph
+
     started = time.perf_counter()
     trace_id = f"af-doc-{uuid.uuid4()}"
-    if settings.mode == "off":
-        return _failed_response(
-            request,
-            trace_id,
-            "agentforge_off",
-            "The sidecar is configured in off mode.",
-            started,
-        )
-
-    if settings.mode == "real":
-        try:
-            response, diagnostics = _real_extract(request, settings, trace_id, started)
-            return response, diagnostics
-        except Exception as exc:
-            fallback, diagnostics = _heuristic_extract(request, trace_id, started)
-            fallback.warnings.append(
-                WarningItem(
-                    code="real_extraction_fallback",
-                    message=f"Real extraction failed; heuristic extraction was used for demo continuity: {exc}",
-                )
-            )
-            fallback = fallback.model_copy(update={"extraction_status": "partial"})
-            diagnostics["fallback_reason"] = "real_extraction_fallback"
-            return fallback, diagnostics
-
-    return _heuristic_extract(request, trace_id, started)
+    result = run_document_extraction_graph(
+        request=request,
+        settings=settings,
+        trace_id=trace_id,
+        started=started,
+        real_extract=_real_extract,
+        heuristic_extract=_heuristic_extract,
+        failed_response=_failed_response,
+    )
+    return result.response, result.diagnostics
 
 
 def _real_extract(
@@ -304,7 +299,8 @@ def _normalize_fact(request: DocumentExtractionRequest, fact: ExtractedFact, ind
             "quote_or_value": fact.citation.quote_or_value or fact.value,
         }
     )
-    return fact.model_copy(update={"citation": citation})
+    label = CANONICAL_FIELD_LABELS.get(citation.field_or_chunk_id.strip().lower(), fact.label)
+    return fact.model_copy(update={"citation": citation, "label": label})
 
 
 def _handoff(

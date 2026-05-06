@@ -1,3 +1,4 @@
+import json
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -763,11 +764,13 @@ class VerifierTest(unittest.TestCase):
             response, _trace = handle_chat(request, settings)
 
         self.assertEqual(response.verification_status, "verified")
-        self.assertEqual(len(fake_langfuse.observations), 1)
+        self.assertGreaterEqual(len(fake_langfuse.observations), 1)
         root = fake_langfuse.observations[0]
         self.assertNotIn("message", root.kwargs["input"])
         self.assertTrue(root.updates)
         self.assertNotIn("answer", root.updates[-1]["output"])
+        for observation in fake_langfuse.observations:
+            self.assertNotIn("Pneumonia", json.dumps(observation.kwargs))
 
     def test_langfuse_payload_capture_is_explicit(self):
         request = request_with_source("Pneumonia")

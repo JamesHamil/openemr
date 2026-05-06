@@ -15,11 +15,11 @@ MAX_GUIDELINES = 3
 
 def augment_with_guidelines(request: AgentForgeRequest, settings: Settings | None = None) -> tuple[AgentForgeRequest, dict]:
     if not request.evidence_bundle.sources:
-        return request, {"retrieval_hits": 0, "rerank_scores": []}
+        return request, {"retrieval_hits": 0, "rerank_scores": [], "selected_chunk_ids": [], "score_details": []}
     query = _query_text(request)
     chunks = _rank_guidelines(query, settings)[:MAX_GUIDELINES]
     if not chunks:
-        return request, {"retrieval_hits": 0, "rerank_scores": []}
+        return request, {"retrieval_hits": 0, "rerank_scores": [], "selected_chunk_ids": [], "score_details": []}
 
     sources = list(request.evidence_bundle.sources)
     for chunk in chunks:
@@ -36,6 +36,9 @@ def augment_with_guidelines(request: AgentForgeRequest, settings: Settings | Non
                     "section": chunk.get("section", ""),
                     "citation_label": chunk.get("citation_label", ""),
                     "score": f"{chunk.get('_score', 0.0):.4f}",
+                    "sparse_score": f"{chunk.get('_sparse_score', 0.0):.4f}",
+                    "dense_score": f"{chunk.get('_dense_score', 0.0):.4f}",
+                    "final_rerank_score": f"{chunk.get('_score', 0.0):.4f}",
                 },
             )
         )
@@ -52,6 +55,18 @@ def augment_with_guidelines(request: AgentForgeRequest, settings: Settings | Non
     return request.model_copy(update={"evidence_bundle": bundle}), {
         "retrieval_hits": len(chunks),
         "rerank_scores": [float(chunk.get("_score", 0.0)) for chunk in chunks],
+        "selected_chunk_ids": [str(chunk.get("id", "")) for chunk in chunks],
+        "citation_labels": [str(chunk.get("citation_label", "")) for chunk in chunks],
+        "score_details": [
+            {
+                "chunk_id": str(chunk.get("id", "")),
+                "citation_label": str(chunk.get("citation_label", "")),
+                "sparse_score": round(float(chunk.get("_sparse_score", 0.0)), 4),
+                "dense_score": round(float(chunk.get("_dense_score", 0.0)), 4),
+                "final_rerank_score": round(float(chunk.get("_score", 0.0)), 4),
+            }
+            for chunk in chunks
+        ],
     }
 
 
@@ -76,6 +91,8 @@ def _rank_guidelines(query: str, settings: Settings | None = None) -> list[dict]
         if score > 0:
             item = dict(chunk)
             item["_score"] = score
+            item["_sparse_score"] = sparse
+            item["_dense_score"] = dense
             ranked.append(item)
     ranked.sort(key=lambda item: (item["_score"], item["id"]), reverse=True)
     return ranked
@@ -154,5 +171,7 @@ def _keywords(text: str) -> list[str]:
 @lru_cache(maxsize=1)
 def _guideline_chunks() -> list[dict]:
     path = Path(__file__).resolve().parents[2] / "guidelines" / "clinical_guidelines.json"
+    if not path.exists():
+        return []
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)

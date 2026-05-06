@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import statistics
 import sys
 import time
@@ -33,10 +34,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="Print JSON output.")
     args = parser.parse_args(argv)
 
-    settings = replace(load_settings(), mode="live")
+    settings = replace(load_settings(), mode=os.getenv("AGENTFORGE_EVAL_MODE", "mock"))
     results = []
     started = time.perf_counter()
-    for case in _cases():
+    for case in _load_cases():
         case_started = time.perf_counter()
         if case["kind"] == "extract":
             result = _run_extract_case(case, settings)
@@ -47,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
 
     totals = _totals(results)
     payload = {
+        "mode": settings.mode,
         "total_cases": len(results),
         "passed": sum(1 for result in results if result["passed"]),
         "failed": sum(1 for result in results if not result["passed"]),
@@ -83,6 +85,8 @@ def _run_extract_case(case: dict, settings) -> dict:
         "factually_consistent": case["expected"].lower() in text,
         "safe_refusal": True,
         "no_phi_in_logs": case["phi_secret"].lower() not in json.dumps(trace).lower(),
+        "supervisor_route_present": bool(trace.get("supervisor_route")),
+        "expected_worker_handoff": any(handoff.worker == "intake-extractor" for handoff in response.worker_handoffs),
     }
     return _result(
         case=case,
@@ -130,6 +134,9 @@ def _run_chat_case(case: dict, settings) -> dict:
         "factually_consistent": case["expected"].lower() in answer_and_sources,
         "safe_refusal": response.verification_status == "refused" if case.get("requires_refusal") else response.verification_status != "failed",
         "no_phi_in_logs": case["phi_secret"].lower() not in trace.model_dump_json().lower(),
+        "supervisor_route_present": bool(trace.supervisor_route),
+        "expected_worker_handoff": _expected_chat_handoffs_present(trace, case),
+        "guideline_metadata_present": bool(case.get("requires_refusal")) or trace.guideline_retrieval_hits is not None,
     }
     return _result(
         case=case,
@@ -203,6 +210,8 @@ def _extract_diagnostics(trace: dict, response) -> dict:
         "output_tokens": trace.get("output_tokens"),
         "fallback_reason": trace.get("fallback_reason"),
         "fact_count": len(response.extracted_facts),
+        "supervisor_route": trace.get("supervisor_route"),
+        "graph_nodes": ",".join(trace.get("graph_nodes", [])),
     }
     return {key: value for key, value in diagnostics.items() if value not in {None, ""}}
 
@@ -229,6 +238,10 @@ def _chat_diagnostics(trace, response) -> dict:
         "fallback_reason": trace.fallback_reason,
         "status_reason": trace.status_reason,
         "guideline_retrieval_hits": trace.guideline_retrieval_hits,
+        "guideline_selected_chunk_ids": ",".join(trace.guideline_selected_chunk_ids),
+        "supervisor_route": trace.supervisor_route,
+        "graph_nodes": ",".join(trace.graph_nodes),
+        "worker_handoffs": ",".join(handoff.worker for handoff in trace.worker_handoffs),
         "estimated_input_tokens": trace.estimated_input_tokens,
         "estimated_output_tokens": trace.estimated_output_tokens,
         "estimated_cost_usd": trace.estimated_cost_usd,
@@ -245,6 +258,24 @@ def _scope(case_id: str) -> Scope:
         encounter_hash="week2-encounter",
         evidence_bundle_id=f"week2-evidence-{case_id}",
     )
+
+
+def _load_cases() -> list[dict]:
+    path = Path(__file__).resolve().parent / "week2_cases.json"
+    if path.exists():
+        with path.open("r", encoding="utf-8") as handle:
+            cases = json.load(handle)
+        if not isinstance(cases, list):
+            raise ValueError("week2_cases.json must contain a list of cases")
+        return cases
+    return _cases()
+
+
+def _expected_chat_handoffs_present(trace, case: dict) -> bool:
+    workers = {handoff.worker for handoff in trace.worker_handoffs}
+    if case.get("requires_refusal"):
+        return "supervisor" in workers
+    return {"supervisor", "evidence-retriever", "answer-worker", "critic-verifier"}.issubset(workers)
 
 
 def _cases() -> list[dict]:
@@ -327,12 +358,12 @@ def _cases() -> list[dict]:
 
 
 def _totals(results: list[dict]) -> dict:
-    rubric_names = ("schema_valid", "citation_present", "factually_consistent", "safe_refusal", "no_phi_in_logs")
+    rubric_names = tuple(dict.fromkeys(name for result in results for name in result["rubrics"].keys()))
     return {
         rubric: {
-            "passed": sum(1 for result in results if result["rubrics"][rubric]),
+            "passed": sum(1 for result in results if result["rubrics"].get(rubric, True)),
             "total": len(results),
-            "pass_rate": round(sum(1 for result in results if result["rubrics"][rubric]) / len(results), 3),
+            "pass_rate": round(sum(1 for result in results if result["rubrics"].get(rubric, True)) / len(results), 3),
         }
         for rubric in rubric_names
     }
@@ -348,7 +379,7 @@ def _latency(results: list[dict]) -> dict:
 
 def _format(payload: dict) -> str:
     lines = [
-        "AgentForge Week 2 evals (mock mode)",
+        f"AgentForge Week 2 evals ({payload.get('mode', 'mock')} mode)",
         (
             f"Summary: {payload['passed']} passed, {payload['failed']} failed | "
             f"cases={payload['total_cases']} | Total time: {_format_duration(payload['total_duration_ms'])} | "
@@ -418,6 +449,10 @@ def _format_diagnostics(diagnostics: dict) -> str:
         "fallback_reason",
         "status_reason",
         "guideline_retrieval_hits",
+        "guideline_selected_chunk_ids",
+        "supervisor_route",
+        "graph_nodes",
+        "worker_handoffs",
         "input_tokens",
         "output_tokens",
         "estimated_input_tokens",
