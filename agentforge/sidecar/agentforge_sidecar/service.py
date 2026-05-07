@@ -26,6 +26,7 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
     repair_count = None
     status_reason = None
     source_selection_mode = None
+    schema_evidence_expansion = {}
     stale_blocked_claim_count = None
     valid_blocked_claim_count = None
     actual_input_tokens = None
@@ -62,6 +63,7 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
                 repair_count = getattr(provider_diagnostics, "repair_count", None)
                 status_reason = getattr(provider_diagnostics, "status_reason", None)
                 source_selection_mode = getattr(provider_diagnostics, "source_selection_mode", None)
+                schema_evidence_expansion = getattr(provider_diagnostics, "schema_evidence_expansion", {}) or {}
                 stale_blocked_claim_count = getattr(provider_diagnostics, "stale_blocked_claim_count", None)
                 valid_blocked_claim_count = getattr(provider_diagnostics, "valid_blocked_claim_count", None)
                 actual_input_tokens = getattr(provider_diagnostics, "input_tokens", None) or None
@@ -114,6 +116,7 @@ def handle_chat(request: AgentForgeRequest, settings: Settings) -> tuple[AgentFo
             repair_count=repair_count,
             status_reason=status_reason,
             source_selection_mode=source_selection_mode,
+            schema_evidence_expansion=schema_evidence_expansion,
             stale_blocked_claim_count=stale_blocked_claim_count,
             valid_blocked_claim_count=valid_blocked_claim_count,
             guideline_retrieval_hits=guideline_retrieval_hits,

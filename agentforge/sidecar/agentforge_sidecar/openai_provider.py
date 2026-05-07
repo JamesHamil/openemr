@@ -128,6 +128,7 @@ class ProviderDiagnostics:
     repair_count: int = 0
     status_reason: str = ""
     source_selection_mode: str = ""
+    schema_evidence_expansion: dict | None = None
     stale_blocked_claim_count: int = 0
     valid_blocked_claim_count: int = 0
     input_tokens: int = 0
@@ -137,42 +138,6 @@ class ProviderDiagnostics:
 def openai_response(request: AgentForgeRequest, trace_id: str, settings: Settings) -> tuple[AgentForgeResponse, ProviderDiagnostics]:
     model = settings.model
     evidence_plan = plan_evidence(request)
-    fast_lab_source_ids = _fast_lab_source_ids_for_plan(request, evidence_plan)
-    if fast_lab_source_ids:
-        selected_sources = _selected_sources(request, fast_lab_source_ids)
-        response = _deterministic_lab_response(selected_sources, trace_id)
-        diagnostics = ProviderDiagnostics(
-            tool_call_count=0,
-            selected_source_count=len(selected_sources),
-            planning_latency_ms=0,
-            compose_latency_ms=0,
-            answer_family=evidence_plan.answer_family,
-            needed_adapters=evidence_plan.needed_adapters,
-            citation_coverage=_code_citation_coverage(response),
-            verifier_result="code_generated",
-            status_reason="fast_lab_path_code_generated",
-            source_selection_mode="fast_lab_path",
-        )
-        return response, diagnostics
-
-    fast_phone_source_ids = _fast_phone_source_ids_for_question(request)
-    if fast_phone_source_ids:
-        selected_sources = _selected_sources(request, fast_phone_source_ids)
-        response = _deterministic_phone_response(selected_sources, trace_id)
-        diagnostics = ProviderDiagnostics(
-            tool_call_count=0,
-            selected_source_count=len(selected_sources),
-            planning_latency_ms=0,
-            compose_latency_ms=0,
-            answer_family=evidence_plan.answer_family,
-            needed_adapters=evidence_plan.needed_adapters,
-            citation_coverage=_code_citation_coverage(response),
-            verifier_result="code_generated",
-            status_reason="fast_phone_path_code_generated",
-            source_selection_mode="fast_phone_path",
-        )
-        return response, diagnostics
-
     try:
         from openai import OpenAI
     except Exception as exc:  # pragma: no cover - depends on runtime dependency
@@ -183,9 +148,10 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             warning_message=f"OpenAI real mode is not available in this runtime: {exc}",
             fallback_reason="openai_runtime_unavailable",
             evidence_plan=evidence_plan,
-    )
+        )
     try:
         client = OpenAI()
+        schema_expansion: dict = {}
         source_selection_mode = (
             "planner"
             if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
@@ -231,14 +197,14 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                     },
                 )
         selected_sources = _selected_sources(request, selected_source_ids)
-        fallback_source_ids = _fallback_source_ids_for_plan(request, evidence_plan)
-        if fallback_source_ids and (
-            not selected_sources
-            or _plan_needs_lab_augmentation(evidence_plan, selected_sources)
-        ):
-            selected_source_ids = _merge_source_ids(selected_source_ids, fallback_source_ids)
-            selected_sources = _selected_sources(request, selected_source_ids)
-            source_selection_mode = f"{source_selection_mode}+deterministic_fallback"
+        selected_source_ids, selected_sources, schema_expansion = _apply_schema_evidence_expansion(
+            request,
+            evidence_plan,
+            selected_source_ids,
+            selected_sources,
+        )
+        if schema_expansion.get("groups"):
+            source_selection_mode = f"{source_selection_mode}+schema_evidence_expansion"
         if not selected_sources:
             warnings = []
             reason = tool_diag.fallback_reason or "no_supporting_evidence_selected"
@@ -268,6 +234,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 needed_adapters=evidence_plan.needed_adapters,
                 status_reason=reason,
                 source_selection_mode=source_selection_mode,
+                schema_evidence_expansion=schema_expansion,
                 input_tokens=tool_diag.input_tokens,
                 output_tokens=tool_diag.output_tokens,
             )
@@ -283,6 +250,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
             "drafted_claims": [claim.model_dump() for claim in tool_plan.drafted_claims],
             "evidence_plan": _plan_payload(evidence_plan),
+            "schema_evidence_expansion": schema_expansion,
         }
 
         with generation_observation(
@@ -331,10 +299,13 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                     "answer": normalized.answer,
                     "stale_blocked_claim_count": stale_blocked_claim_count,
                     "valid_blocked_claim_count": valid_blocked_claim_count,
+                    "schema_evidence_expansion": schema_expansion,
                 },
                 metadata={
                     "compose_latency_ms": compose_latency_ms,
                     "source_selection_mode": source_selection_mode,
+                    "schema_evidence_expansion_groups": ",".join(schema_expansion.get("groups", [])),
+                    "schema_evidence_expansion_added_count": len(schema_expansion.get("added_source_ids", [])),
                     "stale_blocked_claim_count": stale_blocked_claim_count,
                     "valid_blocked_claim_count": valid_blocked_claim_count,
                 },
@@ -349,6 +320,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             evidence_plan=evidence_plan,
             trace_id=trace_id,
         )
+        normalized = _apply_schema_completion_guard(normalized, schema_expansion)
         if tool_diag.invalid_source_id_count > 0:
             normalized = normalized.model_copy(
                 update={
@@ -359,6 +331,15 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                             message="Tool phase returned unknown source ids that were removed before response composition.",
                         )
                     ]
+                }
+            )
+        if schema_expansion.get("groups"):
+            normalized = normalized.model_copy(
+                update={
+                    "debug_trace": {
+                        **normalized.debug_trace,
+                        "schema_evidence_expansion": schema_expansion,
+                    }
                 }
             )
         diagnostics = ProviderDiagnostics(
@@ -374,6 +355,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             repair_count=verification_metadata.repair_count,
             status_reason=verification_metadata.status_reason,
             source_selection_mode=source_selection_mode,
+            schema_evidence_expansion=schema_expansion,
             stale_blocked_claim_count=stale_blocked_claim_count,
             valid_blocked_claim_count=valid_blocked_claim_count,
             input_tokens=tool_diag.input_tokens + compose_input_tokens + verification_metadata.input_tokens,
@@ -434,11 +416,90 @@ def _source_ids_tool_phase_result(
     )
 
 
-def _fast_lab_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
-    if evidence_plan.answer_family != "labs":
+def _apply_schema_evidence_expansion(
+    request: AgentForgeRequest,
+    evidence_plan: EvidencePlan,
+    selected_source_ids: list[str],
+    selected_sources: list[EvidenceSource],
+) -> tuple[list[str], list[EvidenceSource], dict]:
+    groups: list[str] = []
+    expansion_source_ids: list[str] = []
+    prefer_exact_group = False
+
+    lab_source_ids = _schema_lab_source_ids_for_plan(request, evidence_plan, selected_sources)
+    if lab_source_ids:
+        groups.append("labs")
+        expansion_source_ids = _merge_source_ids(expansion_source_ids, lab_source_ids)
+
+    phone_source_ids = _schema_phone_source_ids_for_question(request)
+    if phone_source_ids:
+        groups.append("phone_numbers")
+        expansion_source_ids = _merge_source_ids(expansion_source_ids, phone_source_ids)
+        prefer_exact_group = True
+
+    added_source_ids = [source_id for source_id in expansion_source_ids if source_id not in selected_source_ids]
+    if prefer_exact_group:
+        expanded_source_ids = _merge_source_ids(expansion_source_ids)
+        expanded_sources = _selected_sources(request, expanded_source_ids)
+        return (
+            expanded_source_ids,
+            expanded_sources,
+            {
+                "groups": groups,
+                "added_source_ids": added_source_ids,
+                "candidate_source_ids": expansion_source_ids,
+                "selected_before_count": len(selected_source_ids),
+                "selected_after_count": len(expanded_sources),
+                "reason": "schema_field_group_exact_selection",
+            },
+        )
+    if not added_source_ids:
+        if not expansion_source_ids:
+            return selected_source_ids, selected_sources, {}
+        return (
+            selected_source_ids,
+            selected_sources,
+            {
+                "groups": groups,
+                "added_source_ids": [],
+                "candidate_source_ids": expansion_source_ids,
+                "selected_before_count": len(selected_source_ids),
+                "selected_after_count": len(selected_sources),
+                "reason": "schema_field_group_already_selected",
+            },
+        )
+
+    expanded_source_ids = _merge_source_ids(expansion_source_ids, selected_source_ids)
+    expanded_sources = _selected_sources(request, expanded_source_ids)
+    return (
+        expanded_source_ids,
+        expanded_sources,
+        {
+            "groups": groups,
+            "added_source_ids": added_source_ids,
+            "candidate_source_ids": expansion_source_ids,
+            "selected_before_count": len(selected_source_ids),
+            "selected_after_count": len(expanded_sources),
+            "reason": "schema_field_group_completeness",
+        },
+    )
+
+
+def _schema_lab_source_ids_for_plan(
+    request: AgentForgeRequest,
+    evidence_plan: EvidencePlan,
+    selected_sources: list[EvidenceSource],
+) -> list[str]:
+    if evidence_plan.answer_family != "labs" and not _is_lab_question(request.message):
         return []
-    matches = _fallback_source_ids_for_plan(request, evidence_plan)
-    return matches if matches else []
+    if not _plan_needs_lab_augmentation(evidence_plan, selected_sources):
+        return []
+    return _fallback_source_ids_for_plan(request, evidence_plan)
+
+
+def _is_lab_question(message: str) -> bool:
+    normalized = message.lower()
+    return any(term in normalized for term in ("lab", "labs", "cbc", "blood count", "glucose", "creatinine", "a1c"))
 
 
 def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
@@ -463,7 +524,7 @@ def _plan_needs_lab_augmentation(evidence_plan: EvidencePlan, selected_sources: 
     return lab_like_count < 4
 
 
-def _fast_phone_source_ids_for_question(request: AgentForgeRequest) -> list[str]:
+def _schema_phone_source_ids_for_question(request: AgentForgeRequest) -> list[str]:
     if not _is_phone_number_question(request.message):
         return []
     matches = [
@@ -510,99 +571,6 @@ def _phone_source_sort_key(source: EvidenceSource) -> tuple[int, str, str]:
     return (PHONE_FIELD_ORDER.get(field_id, 9), source.recorded_at, source.id)
 
 
-def _deterministic_lab_response(selected_sources: list[EvidenceSource], trace_id: str) -> AgentForgeResponse:
-    lab_sources = [
-        source
-        for source in selected_sources
-        if source.record_type in {"lab", "document_fact"}
-    ][:8]
-    claims = [
-        Claim(
-            id=f"claim-{index}",
-            text=_lab_claim_text(source),
-            claim_type=source.record_type,
-            source_ids=[source.id],
-            support_status="supported",
-        )
-        for index, source in enumerate(lab_sources, start=1)
-    ]
-    source_map = {source.id: source for source in lab_sources}
-    answer_findings = [_lab_answer_phrase(source) for source in lab_sources[:6]]
-    answer = "Retrieved lab evidence shows " + "; ".join(answer_findings) + "."
-    if not answer_findings:
-        answer = "No retrieved lab facts were selected; confirm current laboratory data in the chart."
-
-    section = []
-    if claims:
-        section = [
-            ResponseSection(
-                id="key-laboratory-findings",
-                title="Key Laboratory Findings",
-                claim_ids=[claim.id for claim in claims],
-            )
-        ]
-
-    return AgentForgeResponse(
-        answer=answer,
-        sections=section,
-        claims=claims,
-        sources=[_response_source_from_evidence(source_map[claim.source_ids[0]]) for claim in claims],
-        warnings=[],
-        blocked_claims=[],
-        verification_status="verified",
-        trace_id=trace_id,
-    )
-
-
-def _deterministic_phone_response(selected_sources: list[EvidenceSource], trace_id: str) -> AgentForgeResponse:
-    phone_sources = [
-        source
-        for source in selected_sources
-        if source.record_type == "document_fact"
-    ][:6]
-    claims = [
-        Claim(
-            id=f"claim-{index}",
-            text=f"{_phone_label_for_source(source)} is {_phone_value_for_source(source)}.",
-            claim_type="document_fact",
-            source_ids=[source.id],
-            support_status="supported",
-        )
-        for index, source in enumerate(phone_sources, start=1)
-    ]
-    findings = [
-        f"{_phone_label_for_source(source)} {_phone_value_for_source(source)} [{source.id}]"
-        for source in phone_sources
-    ]
-    if findings:
-        answer = f"The intake form includes {len(findings)} phone number"
-        answer += "" if len(findings) == 1 else "s"
-        answer += ": " + "; ".join(findings) + "."
-    else:
-        answer = "No retrieved phone number facts were selected from the intake form; confirm in the document."
-
-    sections = []
-    if claims:
-        sections = [
-            ResponseSection(
-                id="phone-numbers",
-                title="Phone Numbers",
-                claim_ids=[claim.id for claim in claims],
-            )
-        ]
-
-    return AgentForgeResponse(
-        answer=answer,
-        sections=sections,
-        claims=claims,
-        sources=[_response_source_from_evidence(source) for source in phone_sources],
-        warnings=[],
-        blocked_claims=[],
-        verification_status="verified",
-        trace_id=trace_id,
-    )
-
-
 def _phone_label_for_source(source: EvidenceSource) -> str:
     field_id = _citation_field_id(source)
     if field_id in PHONE_FIELD_LABELS:
@@ -619,38 +587,6 @@ def _phone_value_for_source(source: EvidenceSource) -> str:
     if len(parts) >= 2:
         return parts[1]
     return source.value.strip()
-
-
-def _lab_claim_text(source: EvidenceSource) -> str:
-    return _lab_answer_phrase(source)
-
-
-def _lab_answer_phrase(source: EvidenceSource) -> str:
-    parts = [part.strip() for part in source.value.split(";") if part.strip()]
-    if not parts:
-        return source.value.strip()
-    label = parts[0]
-    value_parts = []
-    unit = ""
-    details = []
-    for part in parts[1:]:
-        normalized = part.strip()
-        if normalized.startswith("unit "):
-            unit = normalized.removeprefix("unit ").strip()
-        elif normalized.startswith("range "):
-            details.append("range " + normalized.removeprefix("range ").strip())
-        elif normalized.startswith("abnormal "):
-            details.append("flag " + normalized.removeprefix("abnormal ").strip())
-        else:
-            value_parts.append(normalized)
-
-    value = "; ".join(value_parts)
-    if unit:
-        value = f"{value} {unit}".strip()
-    phrase = f"{label}: {value}".strip()
-    if details:
-        phrase = phrase + " (" + ", ".join(details) + ")"
-    return phrase
 
 
 def _draft_claim_text(source: EvidenceSource) -> str:
@@ -707,6 +643,41 @@ def _limit_response(response: AgentForgeResponse, selected_sources: list[Evidenc
             "sections": sections,
             "sources": response_sources,
             "blocked_claims": blocked_claims,
+        }
+    )
+
+
+def _apply_schema_completion_guard(response: AgentForgeResponse, schema_expansion: dict) -> AgentForgeResponse:
+    groups = set(schema_expansion.get("groups", []))
+    if not groups & {"phone_numbers", "intake_contact", "pharmacy", "insurance"}:
+        return response
+    expected_source_ids = set(schema_expansion.get("candidate_source_ids", []))
+    if not expected_source_ids:
+        return response
+    returned_source_ids = {source.id for source in response.sources}
+    missing_source_ids = sorted(expected_source_ids - returned_source_ids)
+    if not missing_source_ids:
+        return response
+
+    warning = WarningItem(
+        code="schema_evidence_omitted",
+        message=(
+            "The model response did not cite every schema-matched source selected for this field-group question: "
+            + ", ".join(missing_source_ids)
+        ),
+    )
+    status = "partial" if response.verification_status == "verified" else response.verification_status
+    return response.model_copy(
+        update={
+            "warnings": response.warnings + [warning],
+            "verification_status": status,
+            "debug_trace": {
+                **response.debug_trace,
+                "schema_evidence_completion": {
+                    "expected_source_ids": sorted(expected_source_ids),
+                    "missing_source_ids": missing_source_ids,
+                },
+            },
         }
     )
 

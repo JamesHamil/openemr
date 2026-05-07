@@ -11,7 +11,14 @@ from agentforge_sidecar.schemas import (
     ToolPhaseResult,
     EvidenceSource,
 )
-from agentforge_sidecar.tool_agent import check_allergy_conflicts, execute_tool, run_tool_phase, search_sources, summarize_by_type
+from agentforge_sidecar.tool_agent import (
+    check_allergy_conflicts,
+    execute_tool,
+    get_document_facts,
+    run_tool_phase,
+    search_sources,
+    summarize_by_type,
+)
 
 
 class _FakeResponse:
@@ -342,6 +349,123 @@ class ToolAgentTest(unittest.TestCase):
         self.assertIn("summary", summary.payload)
         self.assertTrue(conflicts.success)
         self.assertEqual(conflicts.tool, "check_allergy_conflicts")
+
+    def test_get_document_facts_phone_group_returns_all_intake_phone_sources(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={"sources": _intake_document_sources()}
+                )
+            }
+        )
+
+        facts = get_document_facts(request, document_type="intake_form", field_group="phone_numbers", limit=8)
+
+        self.assertEqual(
+            [fact["id"] for fact in facts],
+            ["document-fact-101", "document-fact-102", "document-fact-103"],
+        )
+        self.assertEqual(facts[0]["field_id"], "phone")
+        self.assertEqual(facts[2]["label"], "Pharmacy Phone")
+
+    def test_get_document_facts_filters_by_explicit_fields(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={"sources": _intake_document_sources()}
+                )
+            }
+        )
+
+        facts = get_document_facts(
+            request,
+            document_type="intake_form",
+            fields=["emergency_contact_phone"],
+            limit=8,
+        )
+
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0]["id"], "document-fact-102")
+
+    def test_get_document_facts_unknown_group_returns_empty_result(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={"sources": _intake_document_sources()}
+                )
+            }
+        )
+
+        facts = get_document_facts(request, document_type="intake_form", field_group="nope", limit=8)
+
+        self.assertEqual(facts, [])
+
+    def test_execute_tool_supports_document_fact_tool(self):
+        request = _request().model_copy(
+            update={
+                "evidence_bundle": _request().evidence_bundle.model_copy(
+                    update={"sources": _intake_document_sources()}
+                )
+            }
+        )
+
+        result = execute_tool(
+            request,
+            "get_document_facts",
+            json.dumps({"document_type": "intake_form", "field_group": "phone_numbers"}),
+        )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.tool, "get_document_facts")
+        self.assertEqual(len(result.payload["facts"]), 3)
+
+def _intake_document_sources():
+    return [
+        EvidenceSource(
+            id="document-fact-101",
+            record_type="document_fact",
+            recorded_at="2026-05-05T01:25:58Z",
+            field_path="agentforge_extracted_facts.demographic",
+            value="Patient Phone; (217) 555-0198",
+            metadata={
+                "document_type": "intake_form",
+                "citation": '{"field_or_chunk_id":"phone","page_or_section":"Patient Information"}',
+            },
+        ),
+        EvidenceSource(
+            id="document-fact-102",
+            record_type="document_fact",
+            recorded_at="2026-05-05T01:25:58Z",
+            field_path="agentforge_extracted_facts.demographic",
+            value="Emergency Contact Phone; (217) 555-0144",
+            metadata={
+                "document_type": "intake_form",
+                "citation": '{"field_or_chunk_id":"emergency_contact_phone","page_or_section":"Patient Information"}',
+            },
+        ),
+        EvidenceSource(
+            id="document-fact-103",
+            record_type="document_fact",
+            recorded_at="2026-05-05T01:25:58Z",
+            field_path="agentforge_extracted_facts.pharmacy",
+            value="Pharmacy Phone; (217) 555-0160",
+            metadata={
+                "document_type": "intake_form",
+                "citation": '{"field_or_chunk_id":"pharmacy_phone","page_or_section":"Pharmacy Information"}',
+            },
+        ),
+        EvidenceSource(
+            id="document-fact-104",
+            record_type="document_fact",
+            recorded_at="2026-05-05T01:25:58Z",
+            field_path="agentforge_extracted_facts.email",
+            value="Email; jordan.rivera@example.com",
+            metadata={
+                "document_type": "intake_form",
+                "citation": '{"field_or_chunk_id":"email","page_or_section":"Patient Information"}',
+            },
+        ),
+    ]
 
 
 if __name__ == "__main__":

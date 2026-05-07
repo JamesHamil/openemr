@@ -37,6 +37,13 @@ LAB_DOCUMENT_FACT_HINTS = {
     "sodium",
     "wbc",
 }
+DOCUMENT_FACT_FIELD_GROUPS = {
+    "phone_numbers": {"phone", "patient_phone", "emergency_contact_phone", "pharmacy_phone"},
+    "intake_contact": {"phone", "patient_phone", "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relationship"},
+    "pharmacy": {"preferred_pharmacy_name", "pharmacy_phone", "pharmacy_address"},
+    "insurance": {"insurance_provider", "provider", "policy_number", "group_number", "policyholder_name"},
+    "labs": set(LAB_DOCUMENT_FACT_HINTS),
+}
 SEMANTIC_TYPE_HINTS = {
     "problem": {
         "problem",
@@ -114,6 +121,31 @@ TOOL_DEFINITIONS = [
     },
     {
         "type": "function",
+        "name": "get_document_facts",
+        "description": "Fetch extracted document facts by document type, field names, or schema field group.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "document_type": {
+                    "type": "string",
+                    "description": "Optional document type filter like intake_form or lab_pdf.",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Optional citation field ids like phone, emergency_contact_phone, pharmacy_phone.",
+                },
+                "field_group": {
+                    "type": "string",
+                    "description": "Optional group: phone_numbers, intake_contact, pharmacy, insurance, labs.",
+                },
+                "limit": {"type": "integer"},
+            },
+            "additionalProperties": False,
+        },
+    },
+    {
+        "type": "function",
         "name": "list_adapter_status",
         "description": "Read collector adapter statuses and reasons from OpenEMR evidence collection.",
         "parameters": {
@@ -154,7 +186,9 @@ TOOL_DEFINITIONS = [
 TOOL_SYSTEM_PROMPT = """You are selecting chart evidence for a hospitalist-facing answer.
 You must use tools to inspect evidence and then pick only the most relevant source ids.
 Do not invent source ids. Do not infer facts without tool-backed evidence.
-Choose concise, question-specific evidence and avoid unrelated chart inventory."""
+Choose concise, question-specific evidence and avoid unrelated chart inventory.
+For all/list/show questions about extracted intake or document fields, use get_document_facts
+so every matching field is available before selecting source ids."""
 
 TOOL_BUDGET_EXHAUSTED_PROMPT = (
     "Tool-call budget has been reached for this request. "
@@ -331,6 +365,26 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
         payload = {"sources": get_sources(request, ids[:MAX_SELECTED_SOURCES])}
         return ToolCallResult(tool="get_sources", success=True, payload=payload)
 
+    if name == "get_document_facts":
+        fields = arguments.get("fields") or []
+        if not isinstance(fields, list):
+            fields = []
+        limit_raw = arguments.get("limit", MAX_TOOL_RESULTS)
+        try:
+            limit = int(limit_raw)
+        except (TypeError, ValueError):
+            limit = MAX_TOOL_RESULTS
+        payload = {
+            "facts": get_document_facts(
+                request,
+                document_type=str(arguments.get("document_type", "") or ""),
+                fields=[str(field) for field in fields],
+                field_group=str(arguments.get("field_group", "") or ""),
+                limit=max(1, min(limit, MAX_TOOL_RESULTS)),
+            )
+        }
+        return ToolCallResult(tool="get_document_facts", success=True, payload=payload)
+
     if name == "list_adapter_status":
         payload = {
             "adapter_status": [
@@ -428,6 +482,36 @@ def get_sources(request: AgentForgeRequest, ids: list[str]) -> list[dict]:
             continue
         matches.append(_source_payload(source))
     return matches
+
+
+def get_document_facts(
+    request: AgentForgeRequest,
+    document_type: str = "",
+    fields: list[str] | None = None,
+    field_group: str = "",
+    limit: int = MAX_TOOL_RESULTS,
+) -> list[dict]:
+    requested_fields = {field.strip().lower() for field in (fields or []) if field}
+    group = field_group.strip().lower()
+    if group:
+        requested_fields |= DOCUMENT_FACT_FIELD_GROUPS.get(group, set())
+        if group not in DOCUMENT_FACT_FIELD_GROUPS:
+            return []
+    normalized_document_type = document_type.strip().lower()
+    matches = []
+    for source in request.evidence_bundle.sources:
+        if source.record_type.lower() != "document_fact":
+            continue
+        if normalized_document_type and source.metadata.get("document_type", "").lower() != normalized_document_type:
+            continue
+        citation = _citation_payload(source)
+        field_id = str(citation.get("field_or_chunk_id", "")).strip().lower()
+        if requested_fields and field_id not in requested_fields and not _document_fact_value_matches_fields(source, requested_fields):
+            continue
+        matches.append(source)
+
+    matches.sort(key=lambda source: (_document_fact_group_order(source, requested_fields), source.recorded_at, source.id))
+    return [_document_fact_payload(source) for source in matches[:limit]]
 
 
 def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit_per_type: int = 3) -> list[dict]:
@@ -540,6 +624,53 @@ def _source_payload(source: EvidenceSource) -> dict:
     }
 
 
+def _document_fact_payload(source: EvidenceSource) -> dict:
+    payload = _source_payload(source)
+    citation = _citation_payload(source)
+    payload.update(
+        {
+            "document_type": source.metadata.get("document_type", ""),
+            "label": _document_fact_label(source, citation),
+            "field_id": str(citation.get("field_or_chunk_id", "")),
+            "citation": citation,
+        }
+    )
+    return payload
+
+
+def _citation_payload(source: EvidenceSource) -> dict:
+    raw = source.metadata.get("citation", "")
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _document_fact_label(source: EvidenceSource, citation: dict) -> str:
+    field_id = str(citation.get("field_or_chunk_id", "")).strip()
+    if field_id:
+        return field_id.replace("_", " ").title()
+    return source.value.split(";", 1)[0].strip() or "Document Fact"
+
+
+def _document_fact_value_matches_fields(source: EvidenceSource, fields: set[str]) -> bool:
+    haystack = f"{source.field_path} {source.value} {' '.join(str(value) for value in source.metadata.values())}".lower()
+    return any(field.replace("_", " ") in haystack or field in haystack for field in fields)
+
+
+def _document_fact_group_order(source: EvidenceSource, requested_fields: set[str]) -> tuple[int, str]:
+    field_id = str(_citation_payload(source).get("field_or_chunk_id", "")).strip().lower()
+    ordered = ["phone", "patient_phone", "emergency_contact_phone", "preferred_pharmacy_name", "pharmacy_phone", "pharmacy_address"]
+    if field_id in ordered:
+        return (ordered.index(field_id), field_id)
+    if field_id in requested_fields:
+        return (len(ordered), field_id)
+    return (len(ordered) + 1, field_id)
+
+
 def _keywords(text: str) -> list[str]:
     stop = {
         "the",
@@ -630,6 +761,13 @@ def _usage_tokens(response) -> tuple[int, int]:
 
 
 def _tool_literal(name: str) -> ToolName:
-    if name in {"search_sources", "get_sources", "list_adapter_status", "summarize_by_type", "check_allergy_conflicts"}:
+    if name in {
+        "search_sources",
+        "get_sources",
+        "get_document_facts",
+        "list_adapter_status",
+        "summarize_by_type",
+        "check_allergy_conflicts",
+    }:
         return name
     return "search_sources"

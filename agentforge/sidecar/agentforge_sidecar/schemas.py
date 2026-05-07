@@ -162,6 +162,7 @@ class DocumentExtractionResponse(StrictModel):
 ToolName = Literal[
     "search_sources",
     "get_sources",
+    "get_document_facts",
     "list_adapter_status",
     "summarize_by_type",
     "check_allergy_conflicts",
@@ -218,6 +219,7 @@ class TraceRecord(StrictModel):
     repair_count: int | None = None
     status_reason: str | None = None
     source_selection_mode: str | None = None
+    schema_evidence_expansion: dict = Field(default_factory=dict)
     stale_blocked_claim_count: int | None = None
     valid_blocked_claim_count: int | None = None
     guideline_retrieval_hits: int | None = None
