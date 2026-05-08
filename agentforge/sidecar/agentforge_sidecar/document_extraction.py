@@ -24,8 +24,10 @@ from .tool_agent import _usage_tokens
 
 EXTRACTION_PROMPT = """You are AgentForge's clinical document extraction worker.
 Extract only facts visible in the provided document. Do not infer missing facts.
-Return strict structured facts with citations. For PDF/image inputs, include page-relative
-bounding boxes when visible; otherwise leave bounding_box null and preserve page/section plus quote_or_value.
+Return strict structured facts with citations. For PDF/image inputs, include normalized page-relative
+bounding boxes only when the exact source region is visually identifiable. Use x, y, width, and height
+values from 0.0 to 1.0, plus an optional integer page. Otherwise leave bounding_box null and preserve
+page/section plus quote_or_value.
 Use low confidence and warnings for uncertain, missing, or unreadable fields."""
 
 CANONICAL_FIELD_LABELS = {
@@ -95,6 +97,7 @@ def _real_extract(
 
     parsed_response = client.responses.parse(
         model=settings.model,
+        reasoning=settings.reasoning,
         max_output_tokens=10000,
         input=[
             {"role": "system", "content": EXTRACTION_PROMPT},
@@ -291,16 +294,76 @@ def _fact(
 
 
 def _normalize_fact(request: DocumentExtractionRequest, fact: ExtractedFact, index: int) -> ExtractedFact:
+    page_or_section = fact.citation.page_or_section
     citation = fact.citation.model_copy(
         update={
             "source_type": fact.citation.source_type or request.document_type,
             "source_id": fact.citation.source_id or request.source_id,
+            "page_or_section": page_or_section,
             "field_or_chunk_id": fact.citation.field_or_chunk_id or f"{fact.fact_type}-{index + 1}",
             "quote_or_value": fact.citation.quote_or_value or fact.value,
+            "bounding_box": _normalize_bounding_box(fact.citation.bounding_box, page_or_section),
         }
     )
     label = CANONICAL_FIELD_LABELS.get(citation.field_or_chunk_id.strip().lower(), fact.label)
     return fact.model_copy(update={"citation": citation, "label": label})
+
+
+def _normalize_bounding_box(box: dict[str, float | int] | None, page_or_section: str = "") -> dict[str, float | int] | None:
+    if not isinstance(box, dict):
+        return None
+
+    normalized: dict[str, float | int] = {}
+    for key in ("x", "y", "width", "height"):
+        value = _float_or_none(box.get(key))
+        if value is None:
+            return None
+        normalized[key] = _clamp01(value)
+
+    x = float(normalized["x"])
+    y = float(normalized["y"])
+    width = min(float(normalized["width"]), 1.0 - x)
+    height = min(float(normalized["height"]), 1.0 - y)
+    if width <= 0 or height <= 0:
+        return None
+
+    normalized["width"] = width
+    normalized["height"] = height
+    page = _page_number(box.get("page"), page_or_section)
+    if page is not None:
+        normalized["page"] = page
+    return normalized
+
+
+def _float_or_none(value) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(value, 1.0))
+
+
+def _page_number(raw_page, page_or_section: str) -> int | None:
+    try:
+        page = int(raw_page)
+        if page > 0:
+            return page
+    except (TypeError, ValueError):
+        pass
+
+    match = re.search(r"\bpage\s+(\d+)\b", page_or_section, flags=re.IGNORECASE)
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except ValueError:
+        return None
 
 
 def _handoff(

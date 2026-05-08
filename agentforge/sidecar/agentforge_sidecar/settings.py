@@ -6,8 +6,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Settings:
-    mode: str = "mock"
-    model: str = "gpt-4.1-mini"
+    mode: str = "real"
+    model: str = "gpt-5.4-mini"
+    reasoning_effort: str = "low"
     signing_secret: str = ""
     openai_api_key: str = ""
     request_ttl_seconds: int = 300
@@ -17,11 +18,19 @@ class Settings:
     langfuse_environment: str = "local"
     langfuse_tags: tuple[str, ...] = ()
 
+    @property
+    def reasoning(self) -> dict[str, str]:
+        return {"effort": self.reasoning_effort}
+
 
 def load_settings() -> Settings:
-    mode = os.getenv("AGENTFORGE_MODE", "mock").strip().lower()
+    mode = os.getenv("AGENTFORGE_MODE", "real").strip().lower()
     if mode not in {"real", "mock", "off"}:
-        mode = "mock"
+        mode = "real"
+
+    reasoning_effort = os.getenv("AGENTFORGE_REASONING_EFFORT", "low").strip().lower()
+    if reasoning_effort not in {"minimal", "low", "medium", "high", "xhigh"}:
+        reasoning_effort = "low"
 
     ttl_raw = os.getenv("AGENTFORGE_REQUEST_TTL_SECONDS", "300")
     try:
@@ -31,7 +40,8 @@ def load_settings() -> Settings:
 
     return Settings(
         mode=mode,
-        model=os.getenv("AGENTFORGE_OPENAI_MODEL", "gpt-4.1-mini"),
+        model=os.getenv("AGENTFORGE_OPENAI_MODEL", "gpt-5.4-mini"),
+        reasoning_effort=reasoning_effort,
         signing_secret=os.getenv("AGENTFORGE_SIGNING_SECRET", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),
         request_ttl_seconds=ttl,

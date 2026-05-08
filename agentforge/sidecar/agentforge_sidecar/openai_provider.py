@@ -174,7 +174,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                     "planner_selected_source_ids": list(evidence_plan.selected_source_ids),
                 },
             ) as tool_observation:
-                tool_plan, tool_diag = run_tool_phase(client, request, model)
+                tool_plan, tool_diag = run_tool_phase(client, request, model, settings.reasoning)
                 selected_source_ids = _merge_source_ids(evidence_plan.selected_source_ids, tool_plan.selected_source_ids)
                 update_generation_observation(
                     tool_observation,
@@ -267,6 +267,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             compose_started = time.perf_counter()
             compose_response = client.responses.parse(
                 model=model,
+                reasoning=settings.reasoning,
                 max_output_tokens=2600,
                 input=[
                     {"role": "system", "content": COMPOSE_PROMPT},
@@ -738,6 +739,7 @@ def _model_verify_and_repair(
         ) as verify_observation:
             verify_response = client.responses.parse(
                 model=model,
+                reasoning=settings.reasoning,
                 max_output_tokens=900,
                 input=[
                     {"role": "system", "content": VERIFIER_PROMPT},
@@ -846,6 +848,7 @@ def _repair_response(
         ) as repair_observation:
             repair_response = client.responses.parse(
                 model=model,
+                reasoning=settings.reasoning,
                 max_output_tokens=1800,
                 input=[
                     {"role": "system", "content": REPAIR_PROMPT},

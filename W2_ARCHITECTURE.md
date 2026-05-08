@@ -25,7 +25,7 @@ Week 2 expansion:
 - Store source documents in OpenEMR Documents.
 - Persist extracted facts in module-owned traceable records.
 - Add strict extraction schemas with source citation fields.
-- Add visual document citation metadata, including page-relative bounding boxes.
+- Add visual document citation metadata, including page-relative bounding boxes when extractor coordinates are available.
 - Add guideline retrieval with sparse search, dense embeddings, and local rerank.
 - Add a LangGraph supervisor graph with `intake-extractor` and `evidence-retriever` workers, plus answer and critic/verifier nodes around the existing Week 1 logic.
 - Add a 50-case boolean eval gate that blocks regressions.
@@ -89,7 +89,7 @@ Minimum citation shape:
 }
 ```
 
-Bounding boxes are page-relative coordinates so the UI can render a simple overlay on a PDF preview without storing model-specific geometry. If a document is text-native and a bounding box is unavailable, the system still requires page or section plus quote/value metadata and marks the visual overlay unavailable.
+Bounding boxes are normalized page-relative coordinates so the UI can render a separate citation preview with a highlighted source region without trying to draw over the browser's native PDF viewer. If a document is text-native or the extractor cannot identify reliable coordinates, the system still requires page or section plus quote/value metadata and falls back to textual citation display.
 
 Every final clinical claim must cite patient-record evidence, guideline evidence, or both. Patient-record facts and guideline evidence are intentionally separated. A guideline can support general clinical context, but it cannot prove that this patient has a medication, allergy, lab value, diagnosis, or symptom.
 

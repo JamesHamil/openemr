@@ -15,7 +15,13 @@ app = FastAPI(title="AgentForge Clinical Co-Pilot Sidecar", version="0.1.0")
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     settings = load_settings()
-    return {"status": "ok", "mode": settings.mode, "service": "agentforge-sidecar"}
+    return {
+        "status": "ok",
+        "mode": settings.mode,
+        "model": settings.model,
+        "reasoning_effort": settings.reasoning_effort,
+        "service": "agentforge-sidecar",
+    }
 
 
 @app.post("/v1/chat", response_model=AgentForgeResponse)

@@ -207,7 +207,12 @@ class ToolPhaseDiagnostics:
     output_tokens: int = 0
 
 
-def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[ToolPhaseResult, ToolPhaseDiagnostics]:
+def run_tool_phase(
+    client,
+    request: AgentForgeRequest,
+    model: str,
+    reasoning: dict[str, str] | None = None,
+) -> tuple[ToolPhaseResult, ToolPhaseDiagnostics]:
     started = time.perf_counter()
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     tool_call_count = 0
@@ -216,6 +221,7 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
     summary = _bundle_summary(request)
     response = client.responses.create(
         model=model,
+        reasoning=reasoning,
         max_output_tokens=1000,
         input=[
             {"role": "system", "content": TOOL_SYSTEM_PROMPT},
@@ -266,6 +272,7 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
 
         response = client.responses.create(
             model=model,
+            reasoning=reasoning,
             previous_response_id=response.id,
             max_output_tokens=1000,
             input=tool_outputs,
@@ -278,6 +285,7 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
         if budget_exhausted:
             response = client.responses.create(
                 model=model,
+                reasoning=reasoning,
                 previous_response_id=response.id,
                 max_output_tokens=700,
                 input=[{"role": "user", "content": TOOL_BUDGET_EXHAUSTED_PROMPT}],
@@ -289,6 +297,7 @@ def run_tool_phase(client, request: AgentForgeRequest, model: str) -> tuple[Tool
 
     plan_response = client.responses.parse(
         model=model,
+        reasoning=reasoning,
         previous_response_id=response.id,
         max_output_tokens=700,
         input=[

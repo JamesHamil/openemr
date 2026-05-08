@@ -10,6 +10,7 @@
  * @license   https://github.com/openemr/openemr/blob/master/LICENSE GNU General Public License 3
  *}
 
+<script src="{$webroot|attr}/interface/modules/custom_modules/agentforge/public/vendor/pdfjs/pdf.min.js"></script>
 <script>
 
  {dispatchPatientDocumentEvent event="javascript_ready_fax_dialog"}
@@ -102,6 +103,7 @@ function clearAgentForgeExtractionPreview() {
     $('#agentforgeFactJson').text('');
     $('#agentforgeFactEmpty').removeClass('d-none');
     $('#agentforgeFactPreview').addClass('d-none');
+    clearAgentForgeCitationPreview();
 }
 
 function renderAgentForgeExtractionPreview(payload) {
@@ -129,13 +131,23 @@ function renderAgentForgeExtractionPreview(payload) {
     $('#agentforgeFactEmpty').addClass('d-none');
     facts.forEach(function (fact, index) {
         let citation = fact.citation || {};
-        let row = $('<tr></tr>');
+        let row = $('<tr></tr>').attr('data-agentforge-fact-index', index);
         $('<td class="text-muted"></td>').text(index + 1).appendTo(row);
         $('<td></td>').text(fact.label || fact.fact_type || 'Document fact').appendTo(row);
         $('<td></td>').text(formatAgentForgeFactValue(fact)).appendTo(row);
         $('<td></td>').text(fact.abnormal_flag || '').appendTo(row);
         $('<td></td>').text(formatAgentForgeConfidence(fact.confidence)).appendTo(row);
-        $('<td class="agentforge-citation-cell"></td>').text(formatAgentForgeCitation(citation)).appendTo(row);
+        let citationCell = $('<td class="agentforge-citation-cell"></td>');
+        $('<span></span>').text(formatAgentForgeCitation(citation)).appendTo(citationCell);
+        if (hasAgentForgePreviewableCitation(fact)) {
+            $('<button type="button" class="btn btn-link btn-sm agentforge-preview-link"></button>')
+                .text({xlj t='Preview'})
+                .on('click', function () {
+                    renderAgentForgeCitationPreview(fact, index);
+                })
+                .appendTo(citationCell);
+        }
+        citationCell.appendTo(row);
         tableBody.append(row);
     });
 }
@@ -181,6 +193,204 @@ function formatAgentForgeCitation(citation) {
         }).join(', '));
     }
     return parts.join(' | ');
+}
+
+function hasAgentForgeBoundingBox(citation) {
+    let box = citation && citation.bounding_box;
+    if (!box) {
+        return false;
+    }
+    return ['x', 'y', 'width', 'height'].every(function (key) {
+        let value = Number(box[key]);
+        return Number.isFinite(value) && value >= 0 && value <= 1;
+    }) && Number(box.width) > 0 && Number(box.height) > 0;
+}
+
+function hasAgentForgePreviewableCitation(fact) {
+    let citation = fact && fact.citation ? fact.citation : {};
+    if (hasAgentForgeBoundingBox(citation)) {
+        return true;
+    }
+    if (mime !== 'application/pdf') {
+        return false;
+    }
+    return Boolean(citation.quote_or_value || fact.value || citation.page_or_section);
+}
+
+function clearAgentForgeCitationPreview() {
+    $('#agentforgeCitationPreview').addClass('d-none');
+    $('#agentforgeCitationStage').empty();
+    $('#agentforgeCitationStatus').text('');
+    $('.agentforge-fact-table tr').removeClass('agentforge-fact-active');
+}
+
+function renderAgentForgeCitationPreview(fact, index) {
+    let citation = fact.citation || {};
+    if (!hasAgentForgePreviewableCitation(fact)) {
+        return;
+    }
+
+    $('#agentforgeCitationPreview').removeClass('d-none');
+    $('#agentforgeCitationStage').empty();
+    $('#agentforgeCitationStatus').text({xlj t='Loading citation preview...'});
+    $('.agentforge-fact-table tr').removeClass('agentforge-fact-active');
+    $('.agentforge-fact-table tr[data-agentforge-fact-index="' + index + '"]').addClass('agentforge-fact-active');
+
+    if (mime === 'application/pdf') {
+        renderAgentForgePdfCitation(fact);
+        return;
+    }
+    if (mime && mime.indexOf('image/') === 0) {
+        renderAgentForgeImageCitation(citation);
+        return;
+    }
+    $('#agentforgeCitationStatus').text({xlj t='Visual preview is unavailable for this document type.'});
+}
+
+function renderAgentForgePdfCitation(fact) {
+    let citation = fact.citation || {};
+    if (!window.pdfjsLib || !file) {
+        $('#agentforgeCitationStatus').text({xlj t='PDF preview support is unavailable.'});
+        return;
+    }
+
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        {$webroot|js_escape} + '/interface/modules/custom_modules/agentforge/public/vendor/pdfjs/pdf.worker.min.js';
+    let pageNumber = agentForgeCitationPage(citation);
+    let sourceUrl = agentforgeDocumentContentUrl;
+    let fetchOptions = new Object();
+    fetchOptions.credentials = 'same-origin';
+
+    fetch(sourceUrl, fetchOptions).then(function (response) {
+        if (!response.ok) {
+            throw new Error('document_fetch_failed_' + response.status);
+        }
+        return response.arrayBuffer();
+    }).then(function (buffer) {
+        return window.pdfjsLib.getDocument({ldelim}data: new Uint8Array(buffer){rdelim}).promise;
+    }).then(function (pdf) {
+        pageNumber = Math.max(1, Math.min(pageNumber, pdf.numPages));
+        return pdf.getPage(pageNumber);
+    }).then(function (page) {
+        let stage = $('#agentforgeCitationStage');
+        let baseViewport = page.getViewport({ldelim}scale: 1{rdelim});
+        let targetWidth = Math.min(860, Math.max(320, stage.width() || 720));
+        let viewport = page.getViewport({ldelim}scale: targetWidth / baseViewport.width{rdelim});
+        let canvas = document.createElement('canvas');
+        let context = canvas.getContext('2d');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        canvas.className = 'agentforge-citation-canvas';
+        stage.empty().append(canvas);
+        return page.render({ldelim}canvasContext: context, viewport: viewport{rdelim}).promise.then(function () {
+            return resolveAgentForgeTextBox(page, viewport, fact).then(function (textBox) {
+                let modelBox = hasAgentForgeBoundingBox(citation) ? citation.bounding_box : null;
+                let highlightBox = textBox || modelBox;
+                if (highlightBox) {
+                    addAgentForgeHighlight(stage, highlightBox, textBox ? 'text' : 'model');
+                }
+                let statusSuffix = '';
+                if (textBox) {
+                    statusSuffix = ' | text-aligned highlight';
+                } else if (modelBox) {
+                    statusSuffix = ' | model-provided highlight';
+                } else {
+                    statusSuffix = ' | page rendered; exact quote location was not found';
+                }
+                $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation) + statusSuffix);
+            });
+        });
+    }).catch(function () {
+        $('#agentforgeCitationStatus').text({xlj t='Unable to render the cited document page.'});
+    });
+}
+
+function renderAgentForgeImageCitation(citation) {
+    let stage = $('#agentforgeCitationStage');
+    let image = $('<img class="agentforge-citation-image" alt="">');
+    image.on('load', function () {
+        if (hasAgentForgeBoundingBox(citation)) {
+            addAgentForgeHighlight(stage, citation.bounding_box);
+            $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation) + ' | model-provided highlight');
+        } else {
+            $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation));
+        }
+    });
+    image.on('error', function () {
+        $('#agentforgeCitationStatus').text({xlj t='Unable to render the cited image.'});
+    });
+    stage.empty().append(image);
+    image.attr('src', agentforgeDocumentContentUrl);
+}
+
+function agentForgeCitationPage(citation) {
+    let boxPage = Number(citation.bounding_box && citation.bounding_box.page);
+    if (Number.isFinite(boxPage) && boxPage > 0) {
+        return Math.floor(boxPage);
+    }
+    let match = String(citation.page_or_section || '').match(/page\s+(\d+)/i);
+    return match ? Number(match[1]) : 1;
+}
+
+function resolveAgentForgeTextBox(page, viewport, fact) {
+    let needle = normalizeAgentForgeText(fact.value || (fact.citation || {}).quote_or_value || '');
+    if (!needle) {
+        return Promise.resolve(null);
+    }
+    return page.getTextContent().then(function (content) {
+        let matches = [];
+        (content.items || []).forEach(function (item) {
+            let itemText = normalizeAgentForgeText(item.str || '');
+            if (!itemText || needle.indexOf(itemText) === -1 && itemText.indexOf(needle) === -1) {
+                return;
+            }
+            let transform = window.pdfjsLib.Util.transform(viewport.transform, item.transform);
+            let x = transform[4];
+            let y = transform[5];
+            let width = Math.max(1, Number(item.width || 0) * viewport.scale);
+            let height = Math.max(8, Math.abs(Number(item.height || 0) * viewport.scale));
+            matches.push({ldelim}
+                x: x / viewport.width,
+                y: (y - height) / viewport.height,
+                width: width / viewport.width,
+                height: height / viewport.height
+            {rdelim});
+        });
+        if (!matches.length) {
+            return null;
+        }
+        matches.sort(function (left, right) {
+            return Math.abs((left.width * left.height) - (right.width * right.height));
+        });
+        return padAgentForgeBox(matches[0]);
+    }).catch(function () {
+        return null;
+    });
+}
+
+function normalizeAgentForgeText(value) {
+    return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
+function padAgentForgeBox(box) {
+    let padX = 0.006;
+    let padY = 0.004;
+    let x = Math.max(0, Number(box.x) - padX);
+    let y = Math.max(0, Number(box.y) - padY);
+    let width = Math.min(1 - x, Number(box.width) + padX * 2);
+    let height = Math.min(1 - y, Number(box.height) + padY * 2);
+    return {ldelim}x: x, y: y, width: width, height: height{rdelim};
+}
+
+function addAgentForgeHighlight(stage, box, source) {
+    $('<div class="agentforge-citation-highlight"></div>')
+        .toggleClass('agentforge-citation-highlight-text', source === 'text')
+        .css({ldelim}
+        left: (Number(box.x) * 100) + '%',
+        top: (Number(box.y) * 100) + '%',
+        width: (Number(box.width) * 100) + '%',
+        height: (Number(box.height) * 100) + '%'
+    {rdelim}).appendTo(stage);
 }
 
 function extractWithAgentForge(docid, patientId) {
@@ -360,6 +570,69 @@ function extractWithAgentForge(docid, patientId) {
     overflow-wrap: anywhere;
 }
 
+.agentforge-preview-link {
+    padding: 0 0 0 0.4rem;
+    vertical-align: baseline;
+}
+
+.agentforge-fact-active td {
+    background: rgba(49, 130, 206, 0.14) !important;
+}
+
+.agentforge-citation-preview {
+    border: 1px solid var(--gray300);
+    border-radius: 4px;
+    margin-top: 0.75rem;
+    padding: 0.75rem;
+}
+
+.agentforge-citation-preview-header {
+    align-items: baseline;
+    display: flex;
+    gap: 0.75rem;
+    justify-content: space-between;
+    margin-bottom: 0.5rem;
+}
+
+.agentforge-citation-preview-title {
+    font-size: 0.95rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.agentforge-citation-stage {
+    background: #343a40;
+    display: inline-block;
+    max-width: 100%;
+    position: relative;
+}
+
+.agentforge-citation-canvas,
+.agentforge-citation-image {
+    display: block;
+    height: auto;
+    max-width: 100%;
+}
+
+.agentforge-citation-highlight {
+    background: rgba(255, 193, 7, 0.24);
+    border: 2px solid #ffc107;
+    box-shadow: 0 0 0 2px rgba(33, 37, 41, 0.2);
+    position: absolute;
+}
+
+.agentforge-citation-highlight-text {
+    background: rgba(25, 135, 84, 0.22);
+    border-color: #198754;
+}
+
+.agentforge-citation-status {
+    color: var(--gray600);
+    font-size: 0.8rem;
+    margin-bottom: 0.5rem;
+    overflow-wrap: anywhere;
+}
+
 .agentforge-json-panel {
     margin-top: 0.5rem;
 }
@@ -419,7 +692,7 @@ function extractWithAgentForge(docid, patientId) {
                 <button class="btn btn-sm btn-primary active">{xlt t='Contents'}</button>
               </div>
             </div>
-            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};</script>
+            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};var agentforgeDocumentContentUrl = {$web_path|js_escape} + 'as_file=false';</script>
             <div class="agentforge-doc-toolbar">
               <div class="agentforge-action-group agentforge-extract-actions">
                 <label for="agentforgeDocumentType">{xlt t='AgentForge'}</label>
@@ -458,6 +731,14 @@ function extractWithAgentForge(docid, patientId) {
                   </thead>
                   <tbody id="agentforgeFactTableBody"></tbody>
                 </table>
+              </div>
+              <div id="agentforgeCitationPreview" class="agentforge-citation-preview d-none">
+                <div class="agentforge-citation-preview-header">
+                  <h5 class="agentforge-citation-preview-title">{xlt t='Citation Preview'}</h5>
+                  <button type="button" class="btn btn-link btn-sm p-0" onclick="clearAgentForgeCitationPreview(); return false;">{xlt t='Close'}</button>
+                </div>
+                <div id="agentforgeCitationStatus" class="agentforge-citation-status"></div>
+                <div id="agentforgeCitationStage" class="agentforge-citation-stage"></div>
               </div>
               <details class="agentforge-json-panel">
                 <summary>{xlt t='Raw extraction JSON'}</summary>
