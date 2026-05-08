@@ -26,3 +26,5 @@
 !templates/
 !templates/documents/
 !templates/documents/general_view.html
+agentforge/patient-dashboard/node_modules
+agentforge/patient-dashboard/dist

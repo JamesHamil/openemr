@@ -1,3 +1,11 @@
+FROM node:24-alpine AS patient-dashboard-build
+
+WORKDIR /app
+COPY agentforge/patient-dashboard/package*.json ./
+RUN npm ci
+COPY agentforge/patient-dashboard ./
+RUN npm run build
+
 FROM openemr/openemr@sha256:1d8073d3acfc15b53e771f264b84c0be41a0f0c998f413af39811e1c2e5d8061
 
 LABEL org.opencontainers.image.title="AgentForge OpenEMR Clinical Co-Pilot"
@@ -13,4 +21,5 @@ COPY docs /var/www/localhost/htdocs/openemr/agentforge/docs
 COPY agentforge/contracts /var/www/localhost/htdocs/openemr/agentforge/contracts
 COPY agentforge/evals /var/www/localhost/htdocs/openemr/agentforge/evals
 COPY interface/modules/custom_modules/agentforge /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
+COPY --from=patient-dashboard-build /app/dist /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge/public/patient-dashboard
 COPY templates/documents/general_view.html /var/www/localhost/htdocs/openemr/templates/documents/general_view.html

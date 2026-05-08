@@ -1,0 +1,28 @@
+{
+  "name": "@agentforge/patient-dashboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json && vite build",
+    "build:openemr": "npm run build && mkdir -p ../../interface/modules/custom_modules/agentforge/public/patient-dashboard && cp -R dist/. ../../interface/modules/custom_modules/agentforge/public/patient-dashboard/",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^5.1.1",
+    "vite": "^7.2.7",
+    "typescript": "^5.9.3",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.1",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.3",
+    "jsdom": "^27.3.0",
+    "vitest": "^4.0.15"
+  }
+}

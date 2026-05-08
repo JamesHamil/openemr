@@ -145,6 +145,354 @@ function getHiddenDashboardCards(): array
     return $hiddenList;
 }
 
+function agentforgeModernDashboardLoaded(array $data): array
+{
+    return [
+        'status' => 'loaded',
+        'data' => array_values($data),
+    ];
+}
+
+function agentforgeModernDashboardText($value): string
+{
+    return trim((string)($value ?? ''));
+}
+
+function agentforgeModernDashboardArray($value): array
+{
+    return is_array($value) ? $value : [];
+}
+
+function agentforgeModernDashboardItem($id, $title, $detail = '', $meta = '', $status = ''): array
+{
+    return [
+        'id' => agentforgeModernDashboardText($id) ?: hash('sha256', implode('|', [$title, $detail, $meta, $status])),
+        'title' => agentforgeModernDashboardText($title) ?: 'Not recorded',
+        'detail' => agentforgeModernDashboardText($detail),
+        'meta' => agentforgeModernDashboardText($meta),
+        'status' => agentforgeModernDashboardText($status),
+    ];
+}
+
+function agentforgeModernDashboardIssueStatus(array $issue): string
+{
+    if (!empty($issue['enddate']) || (($issue['outcome'] ?? '') == 1)) {
+        return 'inactive';
+    }
+    return 'active';
+}
+
+function agentforgeModernDashboardActiveIssues(array $issues): array
+{
+    return array_filter($issues, fn($issue): bool => (($issue['outcome'] ?? '') != 1) && (empty($issue['enddate']) || (strtotime((string) $issue['enddate']) > strtotime('now'))));
+}
+
+function agentforgeModernDashboardCard($id, $title, array $items, $emptyMessage = 'Nothing recorded.', $span = ''): array
+{
+    $card = [
+        'id' => agentforgeModernDashboardText($id),
+        'title' => agentforgeModernDashboardText($title),
+        'state' => agentforgeModernDashboardLoaded($items),
+        'emptyMessage' => agentforgeModernDashboardText($emptyMessage) ?: 'Nothing recorded.',
+    ];
+    if ($span) {
+        $card['span'] = $span;
+    }
+    return $card;
+}
+
+function agentforgeModernDashboardKeyValueItems(array $pairs): array
+{
+    $items = [];
+    foreach ($pairs as $id => $pair) {
+        [$title, $detail, $meta, $status] = array_pad($pair, 4, '');
+        if (agentforgeModernDashboardText($detail) === '' && agentforgeModernDashboardText($meta) === '' && agentforgeModernDashboardText($status) === '') {
+            continue;
+        }
+        $items[] = agentforgeModernDashboardItem($id, $title, $detail, $meta, $status);
+    }
+    return $items;
+}
+
+function agentforgeModernDashboardBuildData($pid, array $patient, $employer = [], $insurance = [], string $insuranceProviderName = ''): array
+{
+    $employer = agentforgeModernDashboardArray($employer);
+    $insurance = agentforgeModernDashboardArray($insurance);
+    $patientName = trim(implode(' ', array_filter([
+        agentforgeModernDashboardText($patient['fname'] ?? ''),
+        agentforgeModernDashboardText($patient['mname'] ?? ''),
+        agentforgeModernDashboardText($patient['lname'] ?? ''),
+    ])));
+    $sex = generate_display_field(['data_type' => '1', 'list_id' => 'sex'], $patient['sex'] ?? '');
+
+    $allergyService = new AllergyIntoleranceService();
+    $allergies = array_map(
+        fn($issue): array => agentforgeModernDashboardItem(
+            $issue['id'] ?? $issue['uuid'] ?? '',
+            $issue['title'] ?? $issue['diagnosis'] ?? '',
+            $issue['comments'] ?? $issue['reaction'] ?? '',
+            $issue['begdate'] ?? $issue['date'] ?? '',
+            agentforgeModernDashboardIssueStatus($issue)
+        ),
+        agentforgeModernDashboardActiveIssues($allergyService->getAll(['lists.pid' => $pid])->getData())
+    );
+
+    $issueService = new PatientIssuesService();
+    $conditions = array_map(
+        fn($issue): array => agentforgeModernDashboardItem(
+            $issue['id'] ?? $issue['uuid'] ?? '',
+            $issue['title'] ?? $issue['diagnosis'] ?? '',
+            $issue['comments'] ?? '',
+            $issue['begdate'] ?? '',
+            agentforgeModernDashboardIssueStatus($issue)
+        ),
+        agentforgeModernDashboardActiveIssues($issueService->search(['lists.pid' => $pid, 'lists.type' => 'medical_problem'])->getData())
+    );
+    $medications = array_map(
+        fn($issue): array => agentforgeModernDashboardItem(
+            $issue['id'] ?? $issue['uuid'] ?? '',
+            $issue['title'] ?? $issue['diagnosis'] ?? '',
+            $issue['comments'] ?? '',
+            $issue['begdate'] ?? '',
+            agentforgeModernDashboardIssueStatus($issue)
+        ),
+        agentforgeModernDashboardActiveIssues($issueService->search(['lists.pid' => $pid, 'lists.type' => 'medication'])->getData())
+    );
+
+    $prescriptions = [];
+    $rxResult = sqlStatement(
+        "SELECT id, drug, dosage, start_date, active, date_added, drug_dosage_instructions FROM prescriptions WHERE patient_id = ? AND active = '1' ORDER BY COALESCE(start_date, date_added) DESC",
+        [$pid]
+    );
+    while ($rx = sqlFetchArray($rxResult)) {
+        $prescriptions[] = agentforgeModernDashboardItem(
+            $rx['id'] ?? '',
+            $rx['drug'] ?? '',
+            $rx['drug_dosage_instructions'] ?: ($rx['dosage'] ?? ''),
+            $rx['start_date'] ?: ($rx['date_added'] ?? ''),
+            !empty($rx['active']) ? 'active' : 'inactive'
+        );
+    }
+
+    $careTeam = [];
+    try {
+        $careTeamData = (new \OpenEMR\Services\CareTeamService())->getCareTeamData($pid);
+        foreach (($careTeamData['members'] ?? []) as $member) {
+            $name = agentforgeModernDashboardText($member['user_name'] ?? '') ?: agentforgeModernDashboardText($member['contact_name'] ?? '');
+            $careTeam[] = agentforgeModernDashboardItem(
+                ($member['user_id'] ?? '') . '-' . ($member['contact_id'] ?? '') . '-' . ($member['role'] ?? ''),
+                $name,
+                $member['role'] ?? $member['physician_type'] ?? '',
+                $member['provider_since'] ?? '',
+                $member['status'] ?? ''
+            );
+        }
+    } catch (\Throwable $exception) {
+        $careTeam = [];
+    }
+
+    $encounters = [];
+    $encounterResult = sqlStatement(
+        "SELECT fe.encounter, fe.date, fe.reason, pc.pc_catname FROM form_encounter AS fe LEFT JOIN openemr_postcalendar_categories AS pc ON fe.pc_catid = pc.pc_catid WHERE fe.pid = ? ORDER BY fe.date DESC LIMIT 10",
+        [$pid]
+    );
+    while ($encounter = sqlFetchArray($encounterResult)) {
+        $encounters[] = [
+            ...agentforgeModernDashboardItem(
+                $encounter['encounter'] ?? '',
+                $encounter['pc_catname'] ?? 'Encounter',
+                $encounter['reason'] ?? '',
+                $encounter['date'] ?? '',
+                'recorded'
+            ),
+            'dateSort' => !empty($encounter['date']) ? strtotime((string)$encounter['date']) * 1000 : 0,
+        ];
+    }
+
+    $address = trim(implode(' ', array_filter([
+        agentforgeModernDashboardText($patient['street'] ?? ''),
+        agentforgeModernDashboardText($patient['city'] ?? ''),
+        agentforgeModernDashboardText($patient['state'] ?? ''),
+        agentforgeModernDashboardText($patient['postal_code'] ?? ''),
+    ])));
+    $demographics = agentforgeModernDashboardKeyValueItems([
+        'demo-phone' => ['Phone', $patient['phone_home'] ?? $patient['phone_cell'] ?? $patient['phone_biz'] ?? ''],
+        'demo-email' => ['Email', $patient['email'] ?? ''],
+        'demo-address' => ['Address', $address],
+        'demo-language' => ['Language', $patient['language'] ?? ''],
+        'demo-employer' => ['Employer', $employer['name'] ?? ''],
+    ]);
+
+    $portal = agentforgeModernDashboardKeyValueItems([
+        'portal-status' => ['Patient portal', isPortalEnabled() ? 'Enabled for this site' : 'Disabled for this site', '', isPortalAllowed($pid) ? 'allowed' : 'restricted'],
+        'api-status' => ['API access', isApiAllowed($pid) ? 'Allowed' : 'Restricted'],
+        'portal-credentials' => ['Portal credentials', areCredentialsCreated($pid) ? 'Created' : 'Not created'],
+        'portal-email' => ['Contact email', isContactEmail($pid) ? 'Available' : 'Missing'],
+    ]);
+
+    $copay = agentforgeModernDashboardText($insurance['copay'] ?? '');
+    $billing = agentforgeModernDashboardKeyValueItems([
+        'billing-provider' => ['Insurance provider', $insuranceProviderName],
+        'billing-copay' => ['Copay', $copay !== '' ? print_as_money($copay) : ''],
+        'billing-effective' => ['Effective date', $insurance['effdate'] ?? ''],
+        'billing-note' => ['Billing note', $patient['billing_note'] ?? ''],
+    ]);
+
+    $insuranceItems = agentforgeModernDashboardKeyValueItems([
+        'insurance-provider' => ['Provider', $insuranceProviderName],
+        'insurance-policy' => ['Policy number', $insurance['policy_number'] ?? ''],
+        'insurance-group' => ['Group number', $insurance['group_number'] ?? ''],
+        'insurance-end' => ['End date', $insurance['effdate_end'] ?? ''],
+    ]);
+
+    $messages = [];
+    $messageResult = sqlStatement("SELECT id, date, title, body FROM pnotes WHERE pid = ? ORDER BY date DESC LIMIT 5", [$pid]);
+    while ($message = sqlFetchArray($messageResult)) {
+        $messages[] = agentforgeModernDashboardItem(
+            $message['id'] ?? '',
+            $message['title'] ?? 'Patient message',
+            strip_tags((string)($message['body'] ?? '')),
+            $message['date'] ?? '',
+            'recorded'
+        );
+    }
+
+    $recalls = [];
+    $recallResult = sqlStatement("SELECT r_ID, r_eventDate, r_reason FROM medex_recalls WHERE r_pid = ? ORDER BY r_eventDate ASC LIMIT 5", [(int)$pid]);
+    while ($recall = sqlFetchArray($recallResult)) {
+        $recalls[] = agentforgeModernDashboardItem(
+            $recall['r_ID'] ?? '',
+            $recall['r_reason'] ?? 'Recall',
+            '',
+            $recall['r_eventDate'] ?? '',
+            'scheduled'
+        );
+    }
+
+    $appointments = [];
+    $appointmentResult = sqlStatement(
+        "SELECT pc_eid, pc_eventDate, pc_startTime, pc_title, pc_apptstatus FROM openemr_postcalendar_events WHERE pc_pid = ? AND pc_eventDate >= CURDATE() ORDER BY pc_eventDate ASC, pc_startTime ASC LIMIT 5",
+        [(int)$pid]
+    );
+    while ($appointment = sqlFetchArray($appointmentResult)) {
+        $appointments[] = agentforgeModernDashboardItem(
+            $appointment['pc_eid'] ?? '',
+            $appointment['pc_title'] ?? 'Appointment',
+            $appointment['pc_startTime'] ?? '',
+            $appointment['pc_eventDate'] ?? '',
+            generate_plaintext_field(['data_type' => '1', 'list_id' => 'apptstat'], $appointment['pc_apptstatus'] ?? '') ?: 'scheduled'
+        );
+    }
+
+    $amendments = [];
+    $amendmentResult = sqlStatement("SELECT amendment_id, amendment_date, amendment_desc, amendment_status FROM amendments WHERE pid = ? ORDER BY amendment_date DESC LIMIT 5", [$pid]);
+    while ($amendment = sqlFetchArray($amendmentResult)) {
+        $amendments[] = agentforgeModernDashboardItem(
+            $amendment['amendment_id'] ?? '',
+            $amendment['amendment_desc'] ?? 'Amendment',
+            '',
+            $amendment['amendment_date'] ?? '',
+            $amendment['amendment_status'] ?? 'recorded'
+        );
+    }
+
+    $labs = [];
+    $labResult = sqlStatement(
+        "SELECT procedure_report.procedure_report_id, procedure_report.date_collected AS date FROM procedure_report JOIN procedure_order ON procedure_report.procedure_order_id = procedure_order.procedure_order_id WHERE procedure_order.patient_id = ? ORDER BY procedure_report.date_collected DESC LIMIT 5",
+        [$pid]
+    );
+    while ($lab = sqlFetchArray($labResult)) {
+        $labs[] = agentforgeModernDashboardItem($lab['procedure_report_id'] ?? '', 'Lab result', '', $lab['date'] ?? '', 'available');
+    }
+
+    $vitals = [];
+    $vitalResult = sqlStatement("SELECT id, date, bps, bpd, weight, height FROM form_vitals WHERE pid = ? ORDER BY date DESC LIMIT 3", [$pid]);
+    while ($vital = sqlFetchArray($vitalResult)) {
+        $bp = agentforgeModernDashboardText($vital['bps'] ?? '') && agentforgeModernDashboardText($vital['bpd'] ?? '') ? ($vital['bps'] . '/' . $vital['bpd']) : '';
+        $detail = trim(implode(' ', array_filter([
+            $bp ? 'BP ' . $bp : '',
+            agentforgeModernDashboardText($vital['weight'] ?? '') ? 'Weight ' . $vital['weight'] : '',
+            agentforgeModernDashboardText($vital['height'] ?? '') ? 'Height ' . $vital['height'] : '',
+        ])));
+        $vitals[] = agentforgeModernDashboardItem($vital['id'] ?? '', 'Vitals', $detail, $vital['date'] ?? '', 'recorded');
+    }
+
+    $immunizations = [];
+    $immunizationResult = sqlStatement("SELECT id, administered_date, cvx_code, manufacturer FROM immunizations WHERE patient_id = ? ORDER BY administered_date DESC LIMIT 5", [$pid]);
+    while ($immunization = sqlFetchArray($immunizationResult)) {
+        $immunizations[] = agentforgeModernDashboardItem(
+            $immunization['id'] ?? '',
+            $immunization['cvx_code'] ?? 'Immunization',
+            $immunization['manufacturer'] ?? '',
+            $immunization['administered_date'] ?? '',
+            'recorded'
+        );
+    }
+
+    $preferenceEmpty = 'No preferences recorded.';
+    $sections = [
+        [
+            'id' => 'clinical-summary',
+            'cards' => [
+                agentforgeModernDashboardCard('allergies', 'Allergies', $allergies, 'Nothing recorded.'),
+                agentforgeModernDashboardCard('medical-problems', 'Medical Problems', $conditions, 'Nothing recorded.'),
+                agentforgeModernDashboardCard('medications', 'Medications', $medications, 'Nothing recorded.'),
+                agentforgeModernDashboardCard('prescriptions', 'Prescriptions', $prescriptions, 'None.', 'full'),
+            ],
+        ],
+        [
+            'id' => 'care-preferences',
+            'cards' => [
+                agentforgeModernDashboardCard('care-team', 'Care Team', $careTeam, 'No care team entries recorded.', 'full'),
+                agentforgeModernDashboardCard('treatment-preferences', 'Treatment Intervention Preferences', [], $preferenceEmpty, 'full'),
+                agentforgeModernDashboardCard('care-experience-preferences', 'Care Experience Preferences', [], $preferenceEmpty, 'full'),
+            ],
+        ],
+        [
+            'id' => 'dashboard-details',
+            'cards' => [
+                agentforgeModernDashboardCard('demographics', 'Demographics', $demographics, 'No demographic details recorded.', 'wide'),
+                agentforgeModernDashboardCard('patient-portal-api-access', 'Patient Portal / API Access', $portal, 'No portal details recorded.'),
+                agentforgeModernDashboardCard('billing', 'Billing', $billing, 'No billing details recorded.', 'wide'),
+                agentforgeModernDashboardCard('clinical-reminders', 'Clinical Reminders', [], 'No clinical reminders returned.'),
+                agentforgeModernDashboardCard('insurance', 'Insurance', $insuranceItems, 'No insurance details recorded.', 'wide'),
+                agentforgeModernDashboardCard('messages', 'Messages', $messages, 'No messages recorded.', 'wide'),
+                agentforgeModernDashboardCard('recall', 'Recall', $recalls, 'No recall entries recorded.'),
+                agentforgeModernDashboardCard('appointments', 'Appointments', $appointments, 'No appointments recorded.'),
+                agentforgeModernDashboardCard('patient-reminders', 'Patient Reminders', [], 'No patient reminders recorded.', 'wide'),
+                agentforgeModernDashboardCard('disclosures', 'Disclosures', [], 'No disclosures recorded.', 'wide'),
+                agentforgeModernDashboardCard('amendments', 'Amendments', $amendments, 'No amendments recorded.', 'wide'),
+                agentforgeModernDashboardCard('labs', 'Labs', $labs, 'No labs recorded.'),
+                agentforgeModernDashboardCard('vitals', 'Vitals', $vitals, 'No vitals have been documented.', 'wide'),
+                agentforgeModernDashboardCard('health-concerns', 'Health Concerns', $conditions, 'No health concerns recorded.'),
+                agentforgeModernDashboardCard('immunizations', 'Immunizations', $immunizations, 'None.'),
+                agentforgeModernDashboardCard('encounters', 'Encounter History', $encounters, 'No encounters recorded.'),
+            ],
+        ],
+    ];
+
+    return [
+        'patient' => [
+            'status' => 'loaded',
+            'data' => [
+                'id' => (string)$pid,
+                'name' => $patientName ?: 'Unnamed patient',
+                'dateOfBirth' => agentforgeModernDashboardText($patient['DOB_YMD'] ?? $patient['DOB'] ?? '') ?: 'Unknown DOB',
+                'sex' => agentforgeModernDashboardText($sex) ?: 'Unknown',
+                'mrn' => agentforgeModernDashboardText($patient['pubpid'] ?? '') ?: (string)$pid,
+                'active' => empty($patient['deceased_date']),
+            ],
+        ],
+        'allergies' => agentforgeModernDashboardLoaded($allergies),
+        'conditions' => agentforgeModernDashboardLoaded($conditions),
+        'medications' => agentforgeModernDashboardLoaded($medications),
+        'prescriptions' => agentforgeModernDashboardLoaded($prescriptions),
+        'careTeam' => agentforgeModernDashboardLoaded($careTeam),
+        'encounters' => agentforgeModernDashboardLoaded($encounters),
+        'sections' => $sections,
+    ];
+}
+
 function print_as_money($money)
 {
     preg_match("/(\d*)\.?(\d*)/", (string) $money, $moneymatches);
@@ -381,7 +729,10 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
     <?php
     Header::setupHeader(['common', 'utility']);
     require_once("$srcdir/options.js.php");
+    $agentforgeDashboardAssetBase = ($GLOBALS['webroot'] ?? '') . '/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets';
     ?>
+    <link rel="stylesheet" href="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.css'); ?>">
+    <script type="module" src="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.js'); ?>"></script>
     <script>
         // Process click on diagnosis for referential cds popup.
         function referentialCdsClick(codetype, codevalue) {
@@ -1077,12 +1428,18 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         // Collect the patient menu then build it
         $menuPatient = new PatientMenuRole($twig);
         $menuPatient->displayHorizNavBarMenu();
+        $agentforgeModernDashboardData = agentforgeModernDashboardBuildData($pid, $result, $result2, $result3, $insco_name);
         // Get the document ID of the patient ID card if access to it is wanted here.
         $idcard_doc_id = false;
         if (OEGlobalsBag::getInstance()->getString('patient_id_category_name')) {
             $idcard_doc_id = get_document_by_catg($pid, OEGlobalsBag::getInstance()->getString('patient_id_category_name'), 3);
         }
         ?>
+        <div id="agentforge-modern-dashboard-root"></div>
+        <script>
+            window.__AGENTFORGE_PATIENT_DASHBOARD__ = <?php echo json_encode($agentforgeModernDashboardData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        </script>
+        <?php if (($_GET['agentforge_legacy_dashboard'] ?? '') === '1') : ?>
         <div class="main mb-1">
             <!-- start main content div -->
             <div class="row">
@@ -2047,6 +2404,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 </div> <!-- end right column div -->
             </div> <!-- end div.main > row:first  -->
         </div> <!-- end main content div -->
+        <?php endif; ?>
     </div><!-- end container div -->
     <?php $oemr_ui->oeBelowContainerDiv(); ?>
     <script>

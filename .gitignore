@@ -10,6 +10,9 @@ node_modules
 /public/assets/*
 /public/themes/*
 !/public/assets/modified
+agentforge/patient-dashboard/node_modules
+agentforge/patient-dashboard/dist
+interface/modules/custom_modules/agentforge/public/patient-dashboard
 /.docs/.out/*
 
 # ccda service build
