@@ -51,7 +51,7 @@ def load_settings() -> Settings:
         langfuse_environment=os.getenv("LANGFUSE_TRACING_ENVIRONMENT", os.getenv("AGENTFORGE_ENVIRONMENT", "local")),
         langfuse_tags=_csv_tuple(os.getenv("AGENTFORGE_LANGFUSE_TAGS", "")),
     )
-
+  
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
