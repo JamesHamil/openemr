@@ -15,6 +15,7 @@ except Exception:
 
 from langgraph.graph import END, START, StateGraph
 
+from .clinical_planner import plan_evidence
 from .guideline_retriever import augment_with_guidelines
 from .mock_provider import mock_response
 from .observability import graph_node_observation, update_graph_node_observation
@@ -143,7 +144,7 @@ def _chat_graph():
     graph.add_node("answer_worker", _answer_worker)
     graph.add_node("critic_verifier", _critic_verifier)
     graph.add_edge(START, "supervisor")
-    graph.add_conditional_edges("supervisor", _after_supervisor, {"retrieve": "evidence_retriever", "end": END})
+    graph.add_conditional_edges("supervisor", _after_supervisor, {"retrieve": "evidence_retriever", "answer": "answer_worker", "end": END})
     graph.add_edge("evidence_retriever", "answer_worker")
     graph.add_edge("answer_worker", "critic_verifier")
     graph.add_edge("critic_verifier", END)
@@ -169,7 +170,7 @@ def _chat_supervisor(state: ChatGraphState) -> dict:
     settings = state["settings"]
     trace_id = state["trace_id"]
     started = time.perf_counter()
-    route = "retrieve_then_answer"
+    route = _initial_chat_route(request)
     response = None
     fallback_reason = ""
 
@@ -263,7 +264,19 @@ def _chat_supervisor(state: ChatGraphState) -> dict:
 
 
 def _after_supervisor(state: ChatGraphState) -> str:
-    return "end" if "response" in state else "retrieve"
+    if "response" in state:
+        return "end"
+    if state.get("supervisor_route") == "answer_document_facts":
+        return "answer"
+    return "retrieve"
+
+
+def _initial_chat_route(request: AgentForgeRequest) -> str:
+    try:
+        plan = plan_evidence(request)
+    except Exception:
+        return "retrieve_then_answer"
+    return "answer_document_facts" if plan.answer_family == "document_facts" else "retrieve_then_answer"
 
 
 def _evidence_retriever(state: ChatGraphState) -> dict:

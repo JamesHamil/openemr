@@ -57,6 +57,8 @@ Put general clinician caveats, confirm/review language, and safety guidance in a
 Use compact inline citations only when useful (for example [problem-12]).
 For narrow follow-up questions, sections may be empty and claims may be minimal.
 For broad chart-summary requests, include sections with scannable claims.
+For extracted document or intake-form questions, answer directly from selected document facts;
+do not include unrelated chart inventory, unrelated guideline material, or unrelated missing adapters.
 For first-room questions, start with today's symptoms or the patient's main concern, then add chart-specific follow-ups.
 For cardiac questions, separate explicit cardiac diagnoses from risk-related conditions and cite vitals when selected.
 For missing-data questions, name missing data first, then cite any available context second.
@@ -77,6 +79,7 @@ Mark result as:
 - failed: the selected evidence cannot support a useful answer to this question.
 
 Use question-scoped status semantics: missing unrelated adapters are warnings, not automatic partial.
+For extracted document or intake-form questions, verify only against selected document facts and patient-identity sources.
 Recommend partial only when relevant evidence is unavailable, citations remain unsupported, or the answer is incomplete for the question."""
 
 REPAIR_PROMPT = """Revise the AgentForgeResponse using only the selected evidence and verifier feedback.
@@ -131,6 +134,9 @@ class ProviderDiagnostics:
     schema_evidence_expansion: dict | None = None
     stale_blocked_claim_count: int = 0
     valid_blocked_claim_count: int = 0
+    verify_latency_ms: int = 0
+    repair_latency_ms: int = 0
+    model_call_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -154,7 +160,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
         schema_expansion: dict = {}
         source_selection_mode = (
             "planner"
-            if evidence_plan.selected_source_ids and evidence_plan.confidence >= 0.5
+            if evidence_plan.confidence >= 0.5 and (evidence_plan.selected_source_ids or evidence_plan.answer_family == "document_facts")
             else "model_tool_phase"
         )
         if source_selection_mode == "planner":
@@ -192,6 +198,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                         "planning_latency_ms": tool_diag.planning_latency_ms,
                         "fallback_reason": tool_diag.fallback_reason,
                         "invalid_source_id_count": tool_diag.invalid_source_id_count,
+                        "model_call_count": tool_diag.model_call_count,
                         "needed_adapters": ",".join(evidence_plan.needed_adapters),
                         "source_selection_mode": source_selection_mode,
                     },
@@ -211,7 +218,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             warnings.append(
                 WarningItem(
                     code="no_supporting_evidence_selected",
-                    message="Tool-based evidence selection returned no supporting source records for this question.",
+                    message="Evidence selection returned no supporting source records for this question.",
                 )
             )
             response = AgentForgeResponse(
@@ -235,11 +242,13 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 status_reason=reason,
                 source_selection_mode=source_selection_mode,
                 schema_evidence_expansion=schema_expansion,
+                model_call_count=tool_diag.model_call_count,
                 input_tokens=tool_diag.input_tokens,
                 output_tokens=tool_diag.output_tokens,
             )
-            return response, diagnostics
+            return _attach_provider_debug(response, diagnostics), diagnostics
 
+        model_adapter_status = _model_adapter_status(request, evidence_plan)
         compose_payload = {
             "schema_version": request.schema_version,
             "request_id": request.request_id,
@@ -247,7 +256,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             "message": request.message,
             "selected_source_ids": [source.id for source in selected_sources],
             "selected_sources": [source.model_dump() for source in selected_sources],
-            "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+            "adapter_status": [status.model_dump() for status in model_adapter_status],
             "drafted_claims": [claim.model_dump() for claim in tool_plan.drafted_claims],
             "evidence_plan": _plan_payload(evidence_plan),
             "schema_evidence_expansion": schema_expansion,
@@ -281,6 +290,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 ],
                 text_format=ModelAgentForgeResponse,
             )
+            compose_model_call_count = 1
             parsed = compose_response.output_parsed
             if not parsed:
                 raise RuntimeError("OpenAI response did not include parsed AgentForgeResponse output")
@@ -304,6 +314,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 },
                 metadata={
                     "compose_latency_ms": compose_latency_ms,
+                    "model_call_count": compose_model_call_count,
                     "source_selection_mode": source_selection_mode,
                     "schema_evidence_expansion_groups": ",".join(schema_expansion.get("groups", [])),
                     "schema_evidence_expansion_added_count": len(schema_expansion.get("added_source_ids", [])),
@@ -359,9 +370,13 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
             schema_evidence_expansion=schema_expansion,
             stale_blocked_claim_count=stale_blocked_claim_count,
             valid_blocked_claim_count=valid_blocked_claim_count,
+            verify_latency_ms=verification_metadata.verify_latency_ms,
+            repair_latency_ms=verification_metadata.repair_latency_ms,
+            model_call_count=tool_diag.model_call_count + compose_model_call_count + verification_metadata.model_call_count,
             input_tokens=tool_diag.input_tokens + compose_input_tokens + verification_metadata.input_tokens,
             output_tokens=tool_diag.output_tokens + compose_output_tokens + verification_metadata.output_tokens,
         )
+        normalized = _attach_provider_debug(normalized, diagnostics)
         return normalized, diagnostics
     except Exception:  # pragma: no cover - runtime/model-path safeguard
         return _provider_partial_fallback(
@@ -380,6 +395,9 @@ class VerificationMetadata:
     citation_coverage: float | None = None
     repair_count: int = 0
     status_reason: str = ""
+    verify_latency_ms: int = 0
+    repair_latency_ms: int = 0
+    model_call_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -723,13 +741,15 @@ def _model_verify_and_repair(
     evidence_plan: EvidencePlan,
     trace_id: str,
 ) -> tuple[AgentForgeResponse, VerificationMetadata]:
+    model_adapter_status = _model_adapter_status(request, evidence_plan)
     verification_payload = {
         "message": request.message,
         "evidence_plan": _plan_payload(evidence_plan),
         "selected_sources": [source.model_dump() for source in selected_sources],
-        "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+        "adapter_status": [status.model_dump() for status in model_adapter_status],
         "draft_response": response.model_dump(),
     }
+    verify_started = time.perf_counter()
     try:
         with generation_observation(
             "agentforge.verify_response",
@@ -753,6 +773,7 @@ def _model_verify_and_repair(
                 ],
                 text_format=ModelVerificationResult,
             )
+            verify_latency_ms = int((time.perf_counter() - verify_started) * 1000)
             parsed = verify_response.output_parsed
             if not parsed:
                 raise RuntimeError("Model verifier did not return parsed output")
@@ -765,6 +786,7 @@ def _model_verify_and_repair(
                     "verifier_result": parsed.result,
                     "citation_coverage": parsed.citation_coverage,
                     "status_recommendation": parsed.status_recommendation,
+                    "verify_latency_ms": verify_latency_ms,
                 },
             )
 
@@ -773,6 +795,8 @@ def _model_verify_and_repair(
             citation_coverage=parsed.citation_coverage,
             repair_count=0,
             status_reason="model_verifier_passed" if parsed.result == "passed" else "; ".join(parsed.issues[:3]),
+            verify_latency_ms=verify_latency_ms,
+            model_call_count=1,
             input_tokens=verify_input_tokens,
             output_tokens=verify_output_tokens,
         )
@@ -781,6 +805,7 @@ def _model_verify_and_repair(
                 response = response.model_copy(update={"verification_status": parsed.status_recommendation})
             return response, metadata
 
+        repair_started = time.perf_counter()
         repaired = _repair_response(
             client=client,
             model=model,
@@ -792,6 +817,7 @@ def _model_verify_and_repair(
             verification=parsed,
             trace_id=trace_id,
         )
+        repair_latency_ms = int((time.perf_counter() - repair_started) * 1000)
         if repaired is None:
             status = "partial" if response.verification_status == "verified" else response.verification_status
             return response.model_copy(update={"verification_status": status}), VerificationMetadata(
@@ -799,6 +825,9 @@ def _model_verify_and_repair(
                 citation_coverage=parsed.citation_coverage,
                 repair_count=0,
                 status_reason="model_verifier_unrepaired",
+                verify_latency_ms=verify_latency_ms,
+                repair_latency_ms=repair_latency_ms,
+                model_call_count=2,
                 input_tokens=verify_input_tokens,
                 output_tokens=verify_output_tokens,
             )
@@ -808,6 +837,9 @@ def _model_verify_and_repair(
             citation_coverage=parsed.citation_coverage,
             repair_count=1,
             status_reason="model_verifier_repaired",
+            verify_latency_ms=verify_latency_ms,
+            repair_latency_ms=repair_latency_ms,
+            model_call_count=2,
             input_tokens=verify_input_tokens + repair_input_tokens,
             output_tokens=verify_output_tokens + repair_output_tokens,
         )
@@ -817,6 +849,8 @@ def _model_verify_and_repair(
             citation_coverage=_code_citation_coverage(response),
             repair_count=0,
             status_reason="model_verifier_unavailable",
+            verify_latency_ms=int((time.perf_counter() - verify_started) * 1000),
+            model_call_count=1,
         )
 
 
@@ -835,7 +869,7 @@ def _repair_response(
         "message": request.message,
         "evidence_plan": _plan_payload(evidence_plan),
         "selected_sources": [source.model_dump() for source in selected_sources],
-        "adapter_status": [status.model_dump() for status in request.evidence_bundle.adapter_status],
+        "adapter_status": [status.model_dump() for status in _model_adapter_status(request, evidence_plan)],
         "draft_response": response.model_dump(),
         "verifier_feedback": verification.model_dump(),
     }
@@ -947,6 +981,38 @@ def _plan_payload(plan: EvidencePlan) -> dict:
     }
 
 
+def _model_adapter_status(request: AgentForgeRequest, evidence_plan: EvidencePlan):
+    if evidence_plan.answer_family != "document_facts":
+        return request.evidence_bundle.adapter_status
+    scoped = [
+        status
+        for status in request.evidence_bundle.adapter_status
+        if status.adapter == "agentforge_documents"
+    ]
+    return scoped or request.evidence_bundle.adapter_status
+
+
+def _attach_provider_debug(response: AgentForgeResponse, diagnostics: ProviderDiagnostics) -> AgentForgeResponse:
+    debug_trace = dict(response.debug_trace)
+    debug_trace["provider"] = {
+        "answer_family": diagnostics.answer_family,
+        "source_selection_mode": diagnostics.source_selection_mode,
+        "selected_source_count": diagnostics.selected_source_count,
+        "tool_call_count": diagnostics.tool_call_count,
+        "model_call_count": diagnostics.model_call_count,
+        "planning_latency_ms": diagnostics.planning_latency_ms,
+        "compose_latency_ms": diagnostics.compose_latency_ms,
+        "verify_latency_ms": diagnostics.verify_latency_ms,
+        "repair_latency_ms": diagnostics.repair_latency_ms,
+        "verifier_result": diagnostics.verifier_result,
+        "repair_count": diagnostics.repair_count,
+        "input_tokens": diagnostics.input_tokens,
+        "output_tokens": diagnostics.output_tokens,
+        "fallback_reason": diagnostics.fallback_reason,
+    }
+    return response.model_copy(update={"debug_trace": debug_trace})
+
+
 def _response_source_from_evidence(source: EvidenceSource) -> ResponseSource:
     status = source.metadata.get("status", "")
     display_prefix = f"{status.title()} " if status else ""
@@ -1035,4 +1101,4 @@ def _provider_partial_fallback(
         needed_adapters=evidence_plan.needed_adapters if evidence_plan else (),
         status_reason=fallback_reason,
     )
-    return response, diagnostics
+    return _attach_provider_debug(response, diagnostics), diagnostics

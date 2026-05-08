@@ -6,12 +6,12 @@ from agentforge_sidecar.settings import load_settings
 
 
 class SettingsTest(unittest.TestCase):
-    def test_real_mode_uses_gpt_54_mini_low_reasoning_by_default(self):
+    def test_real_mode_uses_gpt_5_nano_low_reasoning_by_default(self):
         with patch.dict(os.environ, {}, clear=True):
             settings = load_settings()
 
         self.assertEqual(settings.mode, "real")
-        self.assertEqual(settings.model, "gpt-5.4-mini")
+        self.assertEqual(settings.model, "gpt-5-nano")
         self.assertEqual(settings.reasoning_effort, "low")
         self.assertEqual(settings.reasoning, {"effort": "low"})
 
@@ -19,14 +19,14 @@ class SettingsTest(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "AGENTFORGE_OPENAI_MODEL": "gpt-5.4-mini",
+                "AGENTFORGE_OPENAI_MODEL": "gpt-5-nano",
                 "AGENTFORGE_REASONING_EFFORT": "medium",
             },
             clear=True,
         ):
             settings = load_settings()
 
-        self.assertEqual(settings.model, "gpt-5.4-mini")
+        self.assertEqual(settings.model, "gpt-5-nano")
         self.assertEqual(settings.reasoning_effort, "medium")
         self.assertEqual(settings.reasoning, {"effort": "medium"})
 

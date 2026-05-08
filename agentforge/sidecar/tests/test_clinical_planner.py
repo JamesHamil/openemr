@@ -236,6 +236,102 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(list(plan.selected_source_ids), ["note-2", "note-1"])
         self.assertEqual(plan.required_adapters, ("recent_notes",))
 
+    def test_intake_form_prompt_is_high_confidence_document_fact_plan(self):
+        request = _request(
+            "I need to know about this patient's intake form",
+            [
+                EvidenceSource(
+                    id="patient-name-1",
+                    record_type="demographic",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="patient_data.fname_lname",
+                    value="Bob Bobsy",
+                ),
+                EvidenceSource(
+                    id="document-fact-273",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.pharmacy",
+                    value="Preferred Pharmacy Name; MediMart",
+                    metadata={"document_type": "intake_form"},
+                ),
+                EvidenceSource(
+                    id="document-fact-274",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.pharmacy",
+                    value="Phone Number; (217) 555-0160",
+                    metadata={"document_type": "intake_form"},
+                ),
+                EvidenceSource(
+                    id="document-fact-300",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.lab_result",
+                    value="Potassium; 5.8; abnormal high",
+                    metadata={"document_type": "lab_pdf"},
+                ),
+            ],
+            [AdapterStatus(adapter="agentforge_documents", status="success")],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "document_facts")
+        self.assertEqual(plan.answer_family, "document_facts")
+        self.assertGreaterEqual(plan.confidence, 0.9)
+        self.assertIn("document-fact-273", plan.selected_source_ids)
+        self.assertIn("document-fact-274", plan.selected_source_ids)
+        self.assertNotIn("document-fact-300", plan.selected_source_ids)
+        self.assertNotIn("patient-name-1", plan.selected_source_ids)
+
+    def test_intake_phone_prompt_selects_document_facts_without_tool_phase_need(self):
+        request = _request(
+            "give me all the phone numbers in the intake form",
+            [
+                EvidenceSource(
+                    id="document-fact-101",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Phone; (217) 555-0198",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"phone","page_or_section":"Patient Information"}',
+                    },
+                ),
+                EvidenceSource(
+                    id="document-fact-102",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Emergency Contact Phone; (217) 555-0144",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"emergency_contact_phone","page_or_section":"Patient Information"}',
+                    },
+                ),
+                EvidenceSource(
+                    id="document-fact-104",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.email",
+                    value="Email; jordan.rivera@example.com",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"email","page_or_section":"Patient Information"}',
+                    },
+                ),
+            ],
+            [AdapterStatus(adapter="agentforge_documents", status="success")],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "document_facts")
+        self.assertGreaterEqual(plan.confidence, 0.9)
+        self.assertEqual(list(plan.selected_source_ids), ["document-fact-102", "document-fact-101"])
+
     def test_ascvd_synonym_selects_cardiometabolic_risk_evidence(self):
         request = _request(
             "ASCVD risk?",

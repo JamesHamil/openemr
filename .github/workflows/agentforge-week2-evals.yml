@@ -51,28 +51,7 @@ jobs:
         run: python agentforge/evals/run_week2_evals.py --json > week2-eval-results.json
 
       - name: Enforce Week 2 eval threshold
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          payload = json.loads(Path("week2-eval-results.json").read_text())
-          if payload["total_cases"] != 50:
-              raise SystemExit(f"Expected exactly 50 Week 2 cases, found {payload['total_cases']}")
-          if payload["failed"]:
-              raise SystemExit(f"Week 2 eval failures: {payload['failed']}")
-          for rubric, stats in payload["rubrics"].items():
-              if stats["pass_rate"] < 0.95:
-                  raise SystemExit(f"Rubric {rubric} below threshold: {stats['pass_rate']}")
-          baseline_path = Path("agentforge/evals/week2_baseline.json")
-          if baseline_path.exists():
-              baseline = json.loads(baseline_path.read_text())
-              for rubric, stats in payload["rubrics"].items():
-                  old_rate = baseline.get("rubrics", {}).get(rubric, {}).get("pass_rate")
-                  if old_rate is not None and old_rate - stats["pass_rate"] > 0.05:
-                      raise SystemExit(f"Rubric {rubric} regressed by more than 5%: {old_rate} -> {stats['pass_rate']}")
-          print("Week 2 eval gate passed")
-          PY
+        run: python agentforge/evals/enforce_week2_gate.py week2-eval-results.json --baseline agentforge/evals/week2_baseline.json
 
       - name: Upload eval results
         uses: actions/upload-artifact@v4

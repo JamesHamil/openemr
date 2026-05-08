@@ -109,7 +109,7 @@ class ToolAgentTest(unittest.TestCase):
         request = _request()
 
         with patch("agentforge_sidecar.tool_agent.MAX_TOOL_CALLS", 1):
-            plan, diagnostics = run_tool_phase(client, request, "gpt-4.1-mini")
+            plan, diagnostics = run_tool_phase(client, request, "gpt-5-nano")
 
         self.assertEqual(plan.selected_source_ids, ["problem-1"])
         self.assertEqual(diagnostics.tool_call_count, 1)

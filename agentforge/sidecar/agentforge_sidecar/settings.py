@@ -7,7 +7,7 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class Settings:
     mode: str = "real"
-    model: str = "gpt-5.4-mini"
+    model: str = "gpt-5-nano"
     reasoning_effort: str = "low"
     signing_secret: str = ""
     openai_api_key: str = ""
@@ -40,7 +40,7 @@ def load_settings() -> Settings:
 
     return Settings(
         mode=mode,
-        model=os.getenv("AGENTFORGE_OPENAI_MODEL", "gpt-5.4-mini"),
+        model=os.getenv("AGENTFORGE_OPENAI_MODEL", "gpt-5-nano"),
         reasoning_effort=reasoning_effort,
         signing_secret=os.getenv("AGENTFORGE_SIGNING_SECRET", ""),
         openai_api_key=os.getenv("OPENAI_API_KEY", ""),

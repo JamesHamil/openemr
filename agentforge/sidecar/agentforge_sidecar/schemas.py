@@ -212,6 +212,9 @@ class TraceRecord(StrictModel):
     fallback_reason: str | None = None
     planning_latency_ms: int | None = None
     compose_latency_ms: int | None = None
+    verify_latency_ms: int | None = None
+    repair_latency_ms: int | None = None
+    model_call_count: int | None = None
     answer_family: str | None = None
     needed_adapters: list[str] = Field(default_factory=list)
     citation_coverage: float | None = None

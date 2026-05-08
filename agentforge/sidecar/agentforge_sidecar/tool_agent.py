@@ -203,6 +203,7 @@ class ToolPhaseDiagnostics:
     fallback_reason: str = ""
     planning_latency_ms: int = 0
     invalid_source_id_count: int = 0
+    model_call_count: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -216,6 +217,7 @@ def run_tool_phase(
     started = time.perf_counter()
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     tool_call_count = 0
+    model_call_count = 1
     fallback_reason = ""
 
     summary = _bundle_summary(request)
@@ -278,6 +280,7 @@ def run_tool_phase(
             input=tool_outputs,
             tools=TOOL_DEFINITIONS,
         )
+        model_call_count += 1
         next_input_tokens, next_output_tokens = _usage_tokens(response)
         input_tokens += next_input_tokens
         output_tokens += next_output_tokens
@@ -290,6 +293,7 @@ def run_tool_phase(
                 max_output_tokens=700,
                 input=[{"role": "user", "content": TOOL_BUDGET_EXHAUSTED_PROMPT}],
             )
+            model_call_count += 1
             next_input_tokens, next_output_tokens = _usage_tokens(response)
             input_tokens += next_input_tokens
             output_tokens += next_output_tokens
@@ -311,6 +315,7 @@ def run_tool_phase(
         ],
         text_format=ToolPhaseResult,
     )
+    model_call_count += 1
     next_input_tokens, next_output_tokens = _usage_tokens(plan_response)
     input_tokens += next_input_tokens
     output_tokens += next_output_tokens
@@ -341,6 +346,7 @@ def run_tool_phase(
         fallback_reason=fallback_reason,
         planning_latency_ms=int((time.perf_counter() - started) * 1000),
         invalid_source_id_count=invalid_source_id_count,
+        model_call_count=model_call_count,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
     )

@@ -40,6 +40,7 @@ Week 2 multimodal expansion:
 - [W2_ARCHITECTURE.md](W2_ARCHITECTURE.md): canonical Week 2 architecture defense for the multimodal evidence agent.
 - [Week 2 PRD notes](docs/week-2/PRD_NOTES.md): extracted requirement summary and guardrails.
 - [Week 2 eval plan](docs/week-2/EVAL_PLAN.md): 50-case boolean eval gate strategy.
+- [Week 2 submission evidence](docs/week-2/SUBMISSION_EVIDENCE.md): PR-blocking eval CI and observable deployed demo evidence.
 - [Week 2 cost and latency plan](docs/week-2/COST_LATENCY_PLAN.md): measurement and bottleneck plan.
 - [Week 2 cost and latency report](docs/week-2/COST_LATENCY_REPORT.md): current baseline, live cost drivers, and scale notes.
 - [Week 2 demo checklist](docs/week-2/DEMO_CHECKLIST.md): recording flow for the checkpoint and final submission.
@@ -115,7 +116,7 @@ AGENTFORGE_SIDECAR_URL=http://agentforge-sidecar:8000
 AGENTFORGE_SIGNING_SECRET=<shared-secret>
 AGENTFORGE_MODE=mock
 OPENAI_API_KEY=<real-mode-only>
-AGENTFORGE_OPENAI_MODEL=gpt-4.1-mini
+AGENTFORGE_OPENAI_MODEL=gpt-5-nano
 AGENTFORGE_LANGFUSE_ENABLED=false
 AGENTFORGE_LANGFUSE_CAPTURE_PAYLOADS=false
 ```

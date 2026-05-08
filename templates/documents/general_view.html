@@ -138,7 +138,6 @@ function renderAgentForgeExtractionPreview(payload) {
         $('<td></td>').text(fact.abnormal_flag || '').appendTo(row);
         $('<td></td>').text(formatAgentForgeConfidence(fact.confidence)).appendTo(row);
         let citationCell = $('<td class="agentforge-citation-cell"></td>');
-        $('<span></span>').text(formatAgentForgeCitation(citation)).appendTo(citationCell);
         if (hasAgentForgePreviewableCitation(fact)) {
             $('<button type="button" class="btn btn-link btn-sm agentforge-preview-link"></button>')
                 .text({xlj t='Preview'})
@@ -147,9 +146,21 @@ function renderAgentForgeExtractionPreview(payload) {
                 })
                 .appendTo(citationCell);
         }
+        $('<span></span>').text(formatAgentForgeCitation(citation)).appendTo(citationCell);
         citationCell.appendTo(row);
         tableBody.append(row);
     });
+
+    let firstPreviewableIndex = facts.findIndex(function (fact) {
+        return hasAgentForgePreviewableCitation(fact);
+    });
+    if (firstPreviewableIndex >= 0) {
+        window.setTimeout(function () {
+            renderAgentForgeCitationPreview(facts[firstPreviewableIndex], firstPreviewableIndex);
+        }, 0);
+    } else {
+        clearAgentForgeCitationPreview();
+    }
 }
 
 function formatAgentForgeFactValue(fact) {
@@ -206,12 +217,29 @@ function hasAgentForgeBoundingBox(citation) {
     }) && Number(box.width) > 0 && Number(box.height) > 0;
 }
 
+function normalizeAgentForgeMime(value) {
+    return String(value || '').toLowerCase().split(';')[0].trim();
+}
+
+function isAgentForgePdfDocument() {
+    let normalizedMime = normalizeAgentForgeMime(mime);
+    return normalizedMime === 'application/pdf' ||
+        normalizedMime === 'application/x-pdf' ||
+        normalizedMime.indexOf('pdf') !== -1 ||
+        /\.pdf($|[?#])/i.test(String(agentforgeDocumentName || '')) ||
+        /\.pdf($|[?#])/i.test(String(file || ''));
+}
+
+function isAgentForgeImageDocument() {
+    return normalizeAgentForgeMime(mime).indexOf('image/') === 0;
+}
+
 function hasAgentForgePreviewableCitation(fact) {
     let citation = fact && fact.citation ? fact.citation : {};
     if (hasAgentForgeBoundingBox(citation)) {
         return true;
     }
-    if (mime !== 'application/pdf') {
+    if (!isAgentForgePdfDocument()) {
         return false;
     }
     return Boolean(citation.quote_or_value || fact.value || citation.page_or_section);
@@ -236,11 +264,11 @@ function renderAgentForgeCitationPreview(fact, index) {
     $('.agentforge-fact-table tr').removeClass('agentforge-fact-active');
     $('.agentforge-fact-table tr[data-agentforge-fact-index="' + index + '"]').addClass('agentforge-fact-active');
 
-    if (mime === 'application/pdf') {
+    if (isAgentForgePdfDocument()) {
         renderAgentForgePdfCitation(fact);
         return;
     }
-    if (mime && mime.indexOf('image/') === 0) {
+    if (isAgentForgeImageDocument()) {
         renderAgentForgeImageCitation(citation);
         return;
     }
@@ -291,7 +319,7 @@ function renderAgentForgePdfCitation(fact) {
                 }
                 let statusSuffix = '';
                 if (textBox) {
-                    statusSuffix = ' | text-aligned highlight';
+                    statusSuffix = ' | UI text-aligned highlight';
                 } else if (modelBox) {
                     statusSuffix = ' | model-provided highlight';
                 } else {
@@ -333,15 +361,23 @@ function agentForgeCitationPage(citation) {
 }
 
 function resolveAgentForgeTextBox(page, viewport, fact) {
-    let needle = normalizeAgentForgeText(fact.value || (fact.citation || {}).quote_or_value || '');
-    if (!needle) {
+    let citation = fact.citation || {};
+    let needles = [citation.quote_or_value, fact.value].map(function (value) {
+        return normalizeAgentForgeText(value || '');
+    }).filter(function (value, index, list) {
+        return value && list.indexOf(value) === index;
+    });
+    if (!needles.length) {
         return Promise.resolve(null);
     }
     return page.getTextContent().then(function (content) {
         let matches = [];
         (content.items || []).forEach(function (item) {
             let itemText = normalizeAgentForgeText(item.str || '');
-            if (!itemText || needle.indexOf(itemText) === -1 && itemText.indexOf(needle) === -1) {
+            let matchedNeedle = needles.find(function (needle) {
+                return itemText && (needle.indexOf(itemText) !== -1 || itemText.indexOf(needle) !== -1);
+            });
+            if (!matchedNeedle) {
                 return;
             }
             let transform = window.pdfjsLib.Util.transform(viewport.transform, item.transform);
@@ -353,14 +389,18 @@ function resolveAgentForgeTextBox(page, viewport, fact) {
                 x: x / viewport.width,
                 y: (y - height) / viewport.height,
                 width: width / viewport.width,
-                height: height / viewport.height
+                height: height / viewport.height,
+                matchScore: Math.abs(itemText.length - matchedNeedle.length)
             {rdelim});
         });
         if (!matches.length) {
             return null;
         }
         matches.sort(function (left, right) {
-            return Math.abs((left.width * left.height) - (right.width * right.height));
+            if (left.matchScore !== right.matchScore) {
+                return left.matchScore - right.matchScore;
+            }
+            return (left.width * left.height) - (right.width * right.height);
         });
         return padAgentForgeBox(matches[0]);
     }).catch(function () {
@@ -571,7 +611,8 @@ function extractWithAgentForge(docid, patientId) {
 }
 
 .agentforge-preview-link {
-    padding: 0 0 0 0.4rem;
+    margin-right: 0.45rem;
+    padding: 0;
     vertical-align: baseline;
 }
 
@@ -602,8 +643,10 @@ function extractWithAgentForge(docid, patientId) {
 
 .agentforge-citation-stage {
     background: #343a40;
-    display: inline-block;
+    display: block;
+    width: fit-content;
     max-width: 100%;
+    overflow: auto;
     position: relative;
 }
 
@@ -692,7 +735,7 @@ function extractWithAgentForge(docid, patientId) {
                 <button class="btn btn-sm btn-primary active">{xlt t='Contents'}</button>
               </div>
             </div>
-            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};var agentforgeDocumentContentUrl = {$web_path|js_escape} + 'as_file=false';</script>
+            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};var agentforgeDocumentName = {$file->get_name()|js_escape};var agentforgeDocumentContentUrl = {$web_path|js_escape} + 'as_file=false';</script>
             <div class="agentforge-doc-toolbar">
               <div class="agentforge-action-group agentforge-extract-actions">
                 <label for="agentforgeDocumentType">{xlt t='AgentForge'}</label>

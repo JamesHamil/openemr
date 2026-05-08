@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +17,7 @@ AnswerFamily = Literal[
     "first_room",
     "missing_data",
     "change_since_review",
+    "document_facts",
     "labs",
     "broad_brief",
     "long_tail",
@@ -63,6 +65,8 @@ def classify_question(message: str) -> AnswerFamily:
         return "change_since_review"
     if "missing" in normalized or "before making clinical decisions" in normalized:
         return "missing_data"
+    if _is_document_fact_question(normalized) and not _is_lab_question(normalized):
+        return "document_facts"
     if "lab" in normalized or "labs" in normalized:
         return "labs"
     if "ask the patient first" in normalized or "enter the room" in normalized:
@@ -153,6 +157,47 @@ def _planner_confidence(message: str, family: AnswerFamily, secondary_families: 
     ):
         return 0.65
     return 0.95
+
+
+def _is_document_fact_question(normalized: str) -> bool:
+    direct_terms = (
+        "document fact",
+        "extracted fact",
+        "extracted facts",
+        "intake",
+        "intake form",
+        "uploaded document",
+        "uploaded documents",
+        "uploaded pdf",
+        "pdf",
+        "form",
+        "paperwork",
+    )
+    if any(term in normalized for term in direct_terms):
+        return True
+    field_terms = (
+        "phone",
+        "contact number",
+        "emergency contact",
+        "preferred pharmacy",
+        "pharmacy",
+        "insurance",
+        "policy number",
+        "group number",
+        "signature",
+        "signed",
+        "address",
+        "email",
+        "social history",
+        "recreational drug",
+        "recreational drugs",
+        "alcohol",
+    )
+    return any(term in normalized for term in field_terms)
+
+
+def _is_lab_question(normalized: str) -> bool:
+    return any(term in normalized for term in ("lab", "labs", "cbc", "blood count", "glucose", "creatinine", "a1c"))
 
 
 def missing_required_adapters(request: AgentForgeRequest, plan: EvidencePlan | None = None) -> list[str]:
@@ -272,6 +317,18 @@ def _family_policy(
                 "If labs are unavailable, say abnormal labs were not found in retrieved lab records and confirm in the chart.",
             ),
         )
+    if family == "document_facts":
+        return (
+            ("agentforge_documents",),
+            (),
+            ("document_fact", "demographic"),
+            (
+                "Answer directly from selected extracted document facts.",
+                "Do not include unrelated chart inventory or unrelated collector gaps.",
+                "If the question is about an intake form, stay within intake-form document facts.",
+                "Use demographic sources only when the question asks for patient identity or demographics.",
+            ),
+        )
     if family == "broad_brief":
         return (
             ("problem_list", "allergies", "medications", "vitals", "labs", "recent_notes"),
@@ -379,6 +436,10 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
         add(_by_type(sources, "note"), 8)
     elif family == "labs":
         add(_by_type(sources, "lab"), 8)
+    elif family == "document_facts":
+        add(_document_fact_sources_for_message(request), 10)
+        if _asks_patient_identity(request.message):
+            add(_by_type(sources, "demographic"), 3)
     elif family == "broad_brief":
         for record_type, limit in (
             ("problem", 3),
@@ -409,6 +470,93 @@ def _labs_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> lis
 
 def _medications_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> list[EvidenceSource]:
     return [source for source in _by_type(sources, "medication") if _matches(source, terms)]
+
+
+def _document_fact_sources_for_message(request: AgentForgeRequest) -> list[EvidenceSource]:
+    normalized = " ".join(request.message.lower().split())
+    sources = _by_type(request.evidence_bundle.sources, "document_fact")
+    if not sources:
+        return []
+
+    if "intake" in normalized or "form" in normalized:
+        intake_sources = [source for source in sources if _document_type(source) in {"intake_form", ""}]
+        if intake_sources:
+            sources = intake_sources
+
+    matched = [source for source in sources if _document_fact_matches_message(source, normalized)]
+    return matched or sources
+
+
+def _document_fact_matches_message(source: EvidenceSource, normalized_message: str) -> bool:
+    field_terms_by_topic = {
+        "phone": ("phone", "number", "contact"),
+        "contact": ("contact", "emergency"),
+        "emergency": ("emergency", "contact"),
+        "pharmacy": ("pharmacy", "medimart"),
+        "insurance": ("insurance", "policy", "group", "provider"),
+        "signature": ("signature", "signed"),
+        "date": ("date",),
+        "address": ("address",),
+        "email": ("email",),
+        "social": ("social", "alcohol", "tobacco", "recreational", "drug"),
+        "alcohol": ("alcohol",),
+        "recreational": ("recreational", "drug"),
+    }
+    query_topics = {
+        topic
+        for topic in field_terms_by_topic
+        if topic in normalized_message
+    }
+    if not query_topics:
+        return True
+
+    haystack = _document_fact_haystack(source)
+    return any(any(term in haystack for term in field_terms_by_topic[topic]) for topic in query_topics)
+
+
+def _document_fact_haystack(source: EvidenceSource) -> str:
+    return " ".join(
+        [
+            source.field_path,
+            source.value,
+            source.note_span or "",
+            " ".join(str(value) for value in source.metadata.values()),
+        ]
+    ).lower()
+
+
+def _document_type(source: EvidenceSource) -> str:
+    document_type = str(source.metadata.get("document_type", "")).lower()
+    if document_type:
+        return document_type
+    raw_citation = source.metadata.get("citation", "")
+    if not raw_citation:
+        return ""
+    try:
+        citation = json.loads(raw_citation)
+    except (TypeError, ValueError):
+        return ""
+    return str(citation.get("document_type", "")).lower() if isinstance(citation, dict) else ""
+
+
+def _asks_patient_identity(message: str) -> bool:
+    normalized = " ".join(message.lower().split())
+    return any(
+        term in normalized
+        for term in (
+            "who is",
+            "patient identity",
+            "identify the patient",
+            "patient name",
+            "name",
+            "dob",
+            "date of birth",
+            "sex",
+            "gender",
+            "demographic",
+            "demographics",
+        )
+    )
 
 
 def _matches(source: EvidenceSource, terms: tuple[str, ...]) -> bool:

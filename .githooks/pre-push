@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${AGENTFORGE_SKIP_WEEK2_HOOK:-}" == "1" ]]; then
+  echo "Skipping AgentForge Week 2 eval gate because AGENTFORGE_SKIP_WEEK2_HOOK=1"
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+python_bin="python3"
+if [[ -x "agentforge/sidecar/.venv/bin/python" ]]; then
+  python_bin="agentforge/sidecar/.venv/bin/python"
+fi
+
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH=agentforge/sidecar
+export AGENTFORGE_MODE=mock
+export AGENTFORGE_EVAL_MODE=mock
+export AGENTFORGE_LANGFUSE_ENABLED=false
+
+echo "Running AgentForge sidecar unit tests..."
+"$python_bin" -m unittest discover -s agentforge/sidecar/tests
+
+results_file="$(mktemp "${TMPDIR:-/tmp}/agentforge-week2-evals.XXXXXX.json")"
+trap 'rm -f "$results_file"' EXIT
+
+echo "Running AgentForge Week 2 eval gate..."
+"$python_bin" agentforge/evals/run_week2_evals.py --json > "$results_file"
+"$python_bin" agentforge/evals/enforce_week2_gate.py "$results_file" --baseline agentforge/evals/week2_baseline.json

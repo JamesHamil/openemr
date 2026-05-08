@@ -201,6 +201,10 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.source_selection_mode, "planner")
         self.assertEqual(diagnostics.tool_call_count, 0)
         self.assertEqual(diagnostics.planning_latency_ms, 0)
+        self.assertEqual(diagnostics.model_call_count, 2)
+        self.assertGreaterEqual(diagnostics.verify_latency_ms, 0)
+        self.assertIn("provider", response.debug_trace)
+        self.assertEqual(response.debug_trace["provider"]["source_selection_mode"], "planner")
         self.assertEqual(diagnostics.input_tokens, 180)
         self.assertEqual(diagnostics.output_tokens, 25)
 
@@ -475,18 +479,17 @@ class OpenAIProviderTest(unittest.TestCase):
 
         with patch.dict("sys.modules", {"openai": openai_module}):
             with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
-                run_tool_phase.return_value = (
-                    ToolPhaseResult(selected_source_ids=["document-fact-103"], focus="Model selected one phone fact."),
-                    ToolPhaseDiagnostics(tool_call_count=1, planning_latency_ms=123),
-                )
                 response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
 
-        run_tool_phase.assert_called_once()
+        run_tool_phase.assert_not_called()
         self.assertEqual(len(client.responses.parse_calls), 2)
         compose_payload = _parse_compose_payload(client.responses.parse_calls[0])
         self.assertEqual(response.verification_status, "verified")
         self.assertIn("schema_evidence_expansion", diagnostics.source_selection_mode)
+        self.assertTrue(diagnostics.source_selection_mode.startswith("planner"))
         self.assertEqual(diagnostics.schema_evidence_expansion["groups"], ["phone_numbers"])
+        self.assertEqual(diagnostics.planning_latency_ms, 0)
+        self.assertEqual(diagnostics.model_call_count, 2)
         self.assertEqual(diagnostics.selected_source_count, 3)
         self.assertEqual(len(response.claims), 3)
         self.assertEqual(
@@ -498,6 +501,105 @@ class OpenAIProviderTest(unittest.TestCase):
             ["document-fact-101", "document-fact-102", "document-fact-103"],
         )
         self.assertEqual(response.sources[-1].extracted_value, "Pharmacy phone; (217) 555-0160")
+        self.assertEqual(response.debug_trace["provider"]["model_call_count"], 2)
+        self.assertEqual(response.debug_trace["provider"]["compose_latency_ms"], diagnostics.compose_latency_ms)
+
+    def test_openai_response_intake_summary_skips_tool_phase_and_keeps_compose_payload_narrow(self):
+        request = _request().model_copy(update={"message": "I need to know about this patient's intake form"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="patient-name-1",
+                        record_type="demographic",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="patient_data.fname_lname",
+                        value="Bob Bobsy",
+                    ),
+                    EvidenceSource(
+                        id="document-fact-273",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.pharmacy",
+                        value="Preferred Pharmacy Name; MediMart",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-271",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.social_history",
+                        value="Alcohol; Occasionally",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                    EvidenceSource(
+                        id="guideline-red-flags-1",
+                        record_type="guideline",
+                        recorded_at="2026-01-01T00:00:00Z",
+                        field_path="guidelines.red_flags",
+                        value="Review red flags.",
+                    ),
+                ],
+                "adapter_status": [
+                    AdapterStatus(adapter="agentforge_documents", status="success"),
+                    AdapterStatus(adapter="allergies", status="unavailable", reason="No active allergy records found."),
+                ],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        composed = ModelAgentForgeResponse(
+            answer="The intake form lists MediMart and occasional alcohol use. [document-fact-273]",
+            claims=[
+                Claim(
+                    id="claim-1",
+                    text="Preferred pharmacy is MediMart.",
+                    claim_type="document_fact",
+                    source_ids=["document-fact-273"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ModelResponseSource(
+                    id="document-fact-273",
+                    record_type="document_fact",
+                    display="Document Fact source",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.pharmacy",
+                    extracted_value="Preferred Pharmacy Name; MediMart",
+                )
+            ],
+            verification_status="verified",
+            trace_id="trace-test",
+        )
+        client = _FakeClient(
+            [
+                composed,
+                ModelVerificationResult(
+                    result="passed",
+                    status_recommendation="verified",
+                    citation_coverage=1.0,
+                ),
+            ]
+        )
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(diagnostics.source_selection_mode, "planner")
+        self.assertEqual(diagnostics.model_call_count, 2)
+        compose_payload = _parse_compose_payload(client.responses.parse_calls[0])
+        verify_payload = _parse_verify_payload(client.responses.parse_calls[1])
+        self.assertEqual(compose_payload["adapter_status"][0]["adapter"], "agentforge_documents")
+        self.assertEqual(len(compose_payload["adapter_status"]), 1)
+        self.assertIn("document-fact-273", compose_payload["selected_source_ids"])
+        self.assertIn("document-fact-271", compose_payload["selected_source_ids"])
+        self.assertNotIn("patient-name-1", compose_payload["selected_source_ids"])
+        self.assertNotIn("guideline-red-flags-1", compose_payload["selected_source_ids"])
+        self.assertEqual(len(verify_payload["adapter_status"]), 1)
+        self.assertEqual(response.debug_trace["provider"]["answer_family"], "document_facts")
 
     def test_schema_completion_guard_marks_omitted_phone_facts_partial(self):
         request = _request().model_copy(update={"message": "give me all the phone numbers in the intake form"})
@@ -695,6 +797,11 @@ class OpenAIProviderTest(unittest.TestCase):
 
 
 def _parse_compose_payload(parse_call: dict) -> dict:
+    user_message = parse_call["input"][1]["content"]
+    return json.loads(user_message.split(":\n", 1)[1])
+
+
+def _parse_verify_payload(parse_call: dict) -> dict:
     user_message = parse_call["input"][1]["content"]
     return json.loads(user_message.split(":\n", 1)[1])
 

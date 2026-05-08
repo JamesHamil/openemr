@@ -78,6 +78,10 @@
       "items": { "type": "string" }
     },
     "verification_status": { "enum": ["verified", "partial", "refused", "failed"] },
-    "trace_id": { "type": "string" }
+    "trace_id": { "type": "string" },
+    "debug_trace": {
+      "type": "object",
+      "additionalProperties": true
+    }
   }
 }

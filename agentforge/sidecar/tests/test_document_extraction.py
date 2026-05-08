@@ -94,7 +94,10 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("agentforgeCitationPreview", source)
         self.assertIn("hasAgentForgeBoundingBox", source)
         self.assertIn("hasAgentForgePreviewableCitation", source)
-        self.assertIn("page rendered; exact quote location was not found", source)
+        self.assertIn("isAgentForgePdfDocument", source)
+        self.assertIn("agentforgeDocumentName", source)
+        self.assertIn("UI text-aligned highlight", source)
+        self.assertIn("renderAgentForgeCitationPreview(facts[firstPreviewableIndex]", source)
         self.assertIn("pdfjsLib.getDocument", source)
         self.assertIn("agentforge-preview-link", source)
 

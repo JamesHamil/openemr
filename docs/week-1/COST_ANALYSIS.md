@@ -4,7 +4,7 @@
 
 AgentForge cost is driven by clinical workflow shape, evidence-bundle size, retry rate, cache behavior, model choice, verification strategy, trace retention, and deployment topology. It is not simply `cost per token * users`.
 
-The current real-mode path uses `gpt-5.4-mini` through Langfuse-observed OpenAI generations. A typical paid chat turn contains:
+The current real-mode path uses `gpt-5-nano` through Langfuse-observed OpenAI generations. A typical paid chat turn contains:
 
 - `agentforge.compose_response`: writes the clinician-facing answer.
 - `agentforge.verify_response`: checks source support.
