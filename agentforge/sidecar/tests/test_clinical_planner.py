@@ -188,7 +188,7 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(list(plan.selected_source_ids), ["document-fact-med-1"])
         self.assertEqual(missing_required_adapters(request, plan), [])
 
-    def test_general_medication_prompt_keeps_complete_uploaded_medication_list(self):
+    def test_general_medication_prompt_prefers_chart_prescriptions_after_writeback(self):
         document_sources = [
             EvidenceSource(
                 id=f"document-fact-med-{index}",
@@ -222,8 +222,8 @@ class ClinicalPlannerTest(unittest.TestCase):
         plan = plan_evidence(request)
 
         self.assertEqual(plan.answer_family, "med_reconciliation")
-        self.assertEqual(len(plan.selected_source_ids), 19)
-        self.assertTrue(all(source.id in plan.selected_source_ids for source in document_sources))
+        self.assertEqual(len(plan.selected_source_ids), 3)
+        self.assertFalse(any(source.id in plan.selected_source_ids for source in document_sources))
         self.assertTrue(all(source.id in plan.selected_source_ids for source in chart_sources))
 
     def test_broad_brief_reserves_source_budget_across_categories(self):

@@ -24,7 +24,7 @@ describe('modern dashboard app', () => {
     expect(screen.getByText('Hypertension')).toBeInTheDocument();
     expect(screen.getAllByText('Metformin')).toHaveLength(2);
     expect(screen.getByText('Primary Care Team')).toBeInTheDocument();
-    expect(screen.getByText('Follow-up')).toBeInTheDocument();
+    expect(screen.getAllByText('Follow-up').length).toBeGreaterThan(0);
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('https://openemr.test/oauth2/default/token', expect.anything()));
   });
 });

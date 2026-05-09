@@ -140,6 +140,12 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("preserved_existing_facts", source)
         self.assertIn("AgentForge extraction could not complete; kept saved facts", source)
         self.assertIn("UI text-aligned highlight", source)
+        self.assertIn("UI row-aligned highlight", source)
+        self.assertIn("resolveAgentForgeImageRowBox", source)
+        self.assertIn("extractAgentForgeMedicationRowIndex", source)
+        self.assertIn("detectAgentForgeInkRowClusters", source)
+        self.assertIn("formatAgentForgeChartWritebackSummary", source)
+        self.assertIn("Chart writeback:", source)
         self.assertIn("renderAgentForgeCitationPreview(agentForgeCurrentFacts[firstPreviewableIndex]", source)
         self.assertIn("pdfjsLib.getDocument", source)
         self.assertIn("agentforge-preview-link", source)
@@ -162,6 +168,36 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("saveEditedFacts", source)
         self.assertIn("medicationListFallbackBoundingBox", source)
         self.assertIn("$citation['bounding_box'] = $fallbackBox", source)
+        self.assertIn("agentforge_chart_writebacks", source)
+
+    def test_php_writeback_service_maps_supported_document_types(self):
+        service = (
+            Path(__file__).resolve().parents[3]
+            / "interface"
+            / "modules"
+            / "custom_modules"
+            / "agentforge"
+            / "src"
+            / "AgentForgeChartWritebackService.php"
+        )
+        source = service.read_text()
+
+        self.assertIn("final class AgentForgeChartWritebackService", source)
+        self.assertIn("writeIntakeFacts", source)
+        self.assertIn("writeMedicationFacts", source)
+        self.assertIn("writeLabFacts", source)
+        self.assertIn("agentforge_chart_writebacks", source)
+        self.assertIn("matchesExact($keys, ['legal_name', 'patient_name', 'full_name', 'name'])", source)
+        self.assertIn("matchesExact($keys, ['dob', 'date_of_birth', 'birth_date'])", source)
+        self.assertIn("matchesExact($keys, ['sex', 'sex_assigned_at_birth'])", source)
+        self.assertIn("UPDATE patient_data SET", source)
+        self.assertIn("INSERT INTO lists ", source)
+        self.assertIn("INSERT INTO lists_medication", source)
+        self.assertIn("medication-list documents now write to Medications", source)
+        self.assertIn("['medication', 'drug', 'uploaded_medication_list']", source)
+        self.assertIn("(string)($row['external_id'] ?? '') === $externalId", source)
+        self.assertIn("INSERT INTO procedure_result", source)
+        self.assertIn("Invalid DOB format; chart field was not updated.", source)
 
     def test_document_facts_endpoint_supports_load_and_save(self):
         endpoint = (
@@ -196,6 +232,9 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("$previousPayload = $store->loadDocumentExtraction", source)
         self.assertIn("agentforge_extract_fact_count($previousPayload) > 0", source)
         self.assertIn("agentforge_extract_preserve_existing_payload", source)
+        self.assertIn("AgentForgeChartWritebackService", source)
+        self.assertIn("$payload['chart_writeback']", source)
+        self.assertIn("chart_writeback_applied", source)
         self.assertIn("failed_preserved_existing_facts", source)
         self.assertIn("preserved_existing_facts", source)
         self.assertIn("saved facts were preserved", source)

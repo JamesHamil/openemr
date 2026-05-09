@@ -324,9 +324,6 @@ def _heuristic_medication_list_facts(request: DocumentExtractionRequest, text: s
                 confidence=0.72 if match else 0.62,
             )
         )
-        if len(facts) >= 24:
-            break
-
     if not facts and request.document_type == "medication_list":
         facts.append(
             _fact(

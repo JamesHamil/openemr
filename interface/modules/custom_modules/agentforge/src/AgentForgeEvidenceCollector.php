@@ -69,7 +69,7 @@ class AgentForgeEvidenceCollector
 
     private function collectProblems(string $pid, array &$sources, array &$statuses): void
     {
-        $count = $this->collectActiveIssueSources($pid, 'medical_problem', 'problem', 'problem', $sources, 6);
+        $count = $this->collectActiveIssueSources($pid, 'medical_problem', 'problem', 'problem', $sources);
         $statuses[] = $count === 0
             ? $this->status('problem_list', 'unavailable', 'No active problem-list records found in retrieved lists.')
             : $this->status('problem_list', 'success');
@@ -77,7 +77,7 @@ class AgentForgeEvidenceCollector
 
     private function collectAllergies(string $pid, array &$sources, array &$statuses): void
     {
-        $count = $this->collectActiveIssueSources($pid, 'allergy', 'allergy', 'allergy', $sources, 6);
+        $count = $this->collectActiveIssueSources($pid, 'allergy', 'allergy', 'allergy', $sources);
         $statuses[] = $count === 0
             ? $this->status('allergies', 'unavailable', 'No active allergy records found in retrieved lists.')
             : $this->status('allergies', 'success');
@@ -88,23 +88,30 @@ class AgentForgeEvidenceCollector
         string $type,
         string $recordType,
         string $sourcePrefix,
-        array &$sources,
-        int $limit
+        array &$sources
     ): int
     {
         // Match the patient dashboard semantics for active issues:
         // unresolved outcome and blank/future end date.
-        $result = sqlStatement(
-            "SELECT id, title, begdate, date, enddate, outcome " .
-            "FROM lists WHERE pid = ? AND type = ? " .
-            "ORDER BY COALESCE(date, begdate) DESC LIMIT 48",
-            [$pid, $type]
-        );
+        if ($type === 'medication') {
+            $result = sqlStatement(
+                "SELECT lists.id, lists.title, lists.begdate, lists.date, lists.enddate, lists.outcome, " .
+                "lists_medication.drug_dosage_instructions " .
+                "FROM lists LEFT JOIN lists_medication ON lists_medication.list_id = lists.id " .
+                "WHERE lists.pid = ? AND lists.type = ? " .
+                "ORDER BY COALESCE(lists.date, lists.begdate) DESC",
+                [$pid, $type]
+            );
+        } else {
+            $result = sqlStatement(
+                "SELECT id, title, begdate, date, enddate, outcome " .
+                "FROM lists WHERE pid = ? AND type = ? " .
+                "ORDER BY COALESCE(date, begdate) DESC",
+                [$pid, $type]
+            );
+        }
         $count = 0;
         while ($row = sqlFetchArray($result)) {
-            if ($count >= $limit) {
-                break;
-            }
             if (!$this->isActiveIssueRow($row) || empty($row['title'])) {
                 continue;
             }
@@ -114,7 +121,7 @@ class AgentForgeEvidenceCollector
                 $sourcePrefix . '-' . (string)$row['id'],
                 $recordType,
                 'lists.title',
-                (string)$row['title'],
+                    trim((string)$row['title'] . (!empty($row['drug_dosage_instructions']) ? '; instructions ' . (string)$row['drug_dosage_instructions'] : '')),
                 (string)($row['date'] ?: $row['begdate'] ?: gmdate('c')),
                 '',
                 [
@@ -129,45 +136,55 @@ class AgentForgeEvidenceCollector
 
     private function collectMedications(string $pid, string $message, array &$sources, array &$statuses): void
     {
-        $count = $this->collectActiveIssueSources($pid, 'medication', 'medication', 'medication-list', $sources, 6);
+        $count = $this->collectActiveIssueSources($pid, 'medication', 'medication', 'medication-list', $sources);
         if ($count === 0) {
-            $count = $this->collectActivePrescriptions($pid, $sources, 6);
+            $count = $this->collectActivePrescriptions($pid, $sources);
+        } elseif ($this->isMedicationPrompt($message)) {
+            $count += $this->collectActivePrescriptions($pid, $sources);
         }
         $statuses[] = $count === 0
             ? $this->status('medications', 'unavailable', 'No active medications found in retrieved medication lists or prescriptions.')
             : $this->status('medications', 'success');
 
         if ($this->isMedicationReconciliationPrompt($message)) {
-            $historyCount = $this->collectHistoricalPrescriptions($pid, $sources, 6);
+            $historyCount = $this->collectHistoricalPrescriptions($pid, $sources);
             $statuses[] = $historyCount === 0
                 ? $this->status('medication_history', 'unavailable', 'No historical prescriptions found for medication reconciliation.')
                 : $this->status('medication_history', 'success');
         }
     }
 
-    private function collectActivePrescriptions(string $pid, array &$sources, int $limit): int
+    private function collectActivePrescriptions(string $pid, array &$sources): int
     {
         $result = sqlStatement(
-            "SELECT id, drug, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 " .
-            "ORDER BY COALESCE(date_added, start_date) DESC LIMIT ?",
-            [$pid, $limit]
+            "SELECT id, drug, dosage, drug_dosage_instructions, external_id, date_added, start_date FROM prescriptions WHERE patient_id = ? AND active = 1 " .
+            "ORDER BY COALESCE(date_added, start_date) DESC",
+            [$pid]
         );
         $count = 0;
         while ($row = sqlFetchArray($result)) {
             if (!empty($row['drug'])) {
+                $valueParts = [(string)$row['drug']];
+                if (!empty($row['dosage'])) {
+                    $valueParts[] = 'dosage ' . (string)$row['dosage'];
+                }
+                if (!empty($row['drug_dosage_instructions'])) {
+                    $valueParts[] = 'instructions ' . (string)$row['drug_dosage_instructions'];
+                }
                 $count++;
                 $this->addSource(
                     $sources,
                     'medication-rx-' . (string)$row['id'],
                     'medication',
                     'prescriptions.drug',
-                    (string)$row['drug'],
+                    implode('; ', $valueParts),
                     (string)($row['date_added'] ?: $row['start_date'] ?: gmdate('c')),
                     '',
                     [
                         'status' => 'current',
                         'source_table' => 'prescriptions',
                         'active' => '1',
+                        'external_id' => (string)($row['external_id'] ?? ''),
                     ]
                 );
             }
@@ -175,12 +192,12 @@ class AgentForgeEvidenceCollector
         return $count;
     }
 
-    private function collectHistoricalPrescriptions(string $pid, array &$sources, int $limit): int
+    private function collectHistoricalPrescriptions(string $pid, array &$sources): int
     {
         $result = sqlStatement(
             "SELECT id, drug, date_added, start_date, active FROM prescriptions WHERE patient_id = ? AND active = 0 " .
-            "ORDER BY COALESCE(date_added, start_date) DESC LIMIT ?",
-            [$pid, $limit]
+            "ORDER BY COALESCE(date_added, start_date) DESC",
+            [$pid]
         );
         $count = 0;
         while ($row = sqlFetchArray($result)) {
@@ -207,28 +224,29 @@ class AgentForgeEvidenceCollector
 
     private function collectVitals(string $pid, array &$sources, array &$statuses): void
     {
-        $row = sqlQuery(
-            "SELECT id, date, bps, bpd, pulse, temperature, weight, height FROM form_vitals WHERE pid = ? ORDER BY date DESC LIMIT 1",
+        $result = sqlStatement(
+            "SELECT id, date, bps, bpd, pulse, temperature, weight, height FROM form_vitals WHERE pid = ? ORDER BY date DESC",
             [$pid]
         );
-        if (empty($row)) {
-            $statuses[] = $this->status('vitals', 'unavailable', 'No vitals found in retrieved form_vitals records.');
-            return;
-        }
-
-        foreach (['bps', 'bpd', 'pulse', 'temperature', 'weight', 'height'] as $field) {
-            if ($row[$field] !== null && $row[$field] !== '') {
-                $this->addSource(
-                    $sources,
-                    'vital-' . (string)$row['id'] . '-' . $field,
-                    'vital',
-                    'form_vitals.' . $field,
-                    $field . ' ' . (string)$row[$field],
-                    (string)($row['date'] ?: gmdate('c'))
-                );
+        $count = 0;
+        while ($row = sqlFetchArray($result)) {
+            foreach (['bps', 'bpd', 'pulse', 'temperature', 'weight', 'height'] as $field) {
+                if ($row[$field] !== null && $row[$field] !== '') {
+                    $count++;
+                    $this->addSource(
+                        $sources,
+                        'vital-' . (string)$row['id'] . '-' . $field,
+                        'vital',
+                        'form_vitals.' . $field,
+                        $field . ' ' . (string)$row[$field],
+                        (string)($row['date'] ?: gmdate('c'))
+                    );
+                }
             }
         }
-        $statuses[] = $this->status('vitals', 'success');
+        $statuses[] = $count === 0
+            ? $this->status('vitals', 'unavailable', 'No vitals found in retrieved form_vitals records.')
+            : $this->status('vitals', 'success');
     }
 
     private function collectLabs(string $pid, array &$sources, array &$statuses): void
@@ -243,8 +261,7 @@ class AgentForgeEvidenceCollector
             "LEFT JOIN procedure_order_code poc ON po.procedure_order_id = poc.procedure_order_id " .
             "AND prep.procedure_order_seq = poc.procedure_order_seq " .
             "WHERE po.patient_id = ? " .
-            "ORDER BY COALESCE(pr.date, prep.date_report, prep.date_collected, po.date_collected, po.date_ordered) DESC " .
-            "LIMIT 8",
+            "ORDER BY COALESCE(pr.date, prep.date_report, prep.date_collected, po.date_collected, po.date_ordered) DESC",
             [$pid]
         );
 
@@ -290,7 +307,7 @@ class AgentForgeEvidenceCollector
     private function collectNotes(string $pid, array &$sources, array &$statuses): void
     {
         $result = sqlStatement(
-            "SELECT id, date, body FROM pnotes WHERE pid = ? ORDER BY date DESC LIMIT 2",
+            "SELECT id, date, body FROM pnotes WHERE pid = ? ORDER BY date DESC",
             [$pid]
         );
         $count = 0;
@@ -317,7 +334,7 @@ class AgentForgeEvidenceCollector
     private function collectExtractedDocumentFacts(string $pid, string $message, array &$sources, array &$statuses): void
     {
         $store = new AgentForgeDocumentStore();
-        $documentSources = $store->recentFactSources($pid, 24, $message);
+        $documentSources = $store->recentFactSources($pid, null, $message);
         foreach ($documentSources as $source) {
             $sources[] = $source;
         }
@@ -410,5 +427,15 @@ class AgentForgeEvidenceCollector
         return strpos($normalized, 'medication reconciliation') !== false
             || strpos($normalized, 'med rec') !== false
             || strpos($normalized, 'reconciliation') !== false;
+    }
+
+    private function isMedicationPrompt(string $message): bool
+    {
+        $normalized = strtolower($message);
+        return strpos($normalized, 'medication') !== false
+            || strpos($normalized, 'medications') !== false
+            || strpos($normalized, 'meds') !== false
+            || strpos($normalized, 'prescription') !== false
+            || $this->isMedicationReconciliationPrompt($message);
     }
 }

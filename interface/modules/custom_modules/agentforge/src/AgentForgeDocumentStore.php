@@ -46,6 +46,28 @@ class AgentForgeDocumentStore
             "KEY `idx_agentforge_facts_pid` (`pid`), KEY `idx_agentforge_facts_type` (`fact_type`)" .
             ") ENGINE=InnoDB COMMENT='AgentForge source-cited extracted facts'"
         );
+        sqlStatement(
+            "CREATE TABLE IF NOT EXISTS `agentforge_chart_writebacks` (" .
+            "`id` BIGINT NOT NULL AUTO_INCREMENT," .
+            "`pid` BIGINT NOT NULL," .
+            "`agentforge_document_id` BIGINT NOT NULL," .
+            "`openemr_document_id` BIGINT DEFAULT NULL," .
+            "`agentforge_fact_id` BIGINT DEFAULT NULL," .
+            "`target_table` VARCHAR(64) NOT NULL," .
+            "`target_field` VARCHAR(120) NOT NULL DEFAULT ''," .
+            "`target_record_id` VARCHAR(120) NOT NULL DEFAULT ''," .
+            "`old_value` TEXT DEFAULT NULL," .
+            "`new_value` TEXT DEFAULT NULL," .
+            "`action` VARCHAR(32) NOT NULL," .
+            "`status` VARCHAR(32) NOT NULL," .
+            "`trace_id` VARCHAR(120) DEFAULT NULL," .
+            "`message` TEXT DEFAULT NULL," .
+            "`created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP," .
+            "PRIMARY KEY (`id`), KEY `idx_agentforge_writebacks_pid` (`pid`), " .
+            "KEY `idx_agentforge_writebacks_document` (`agentforge_document_id`), " .
+            "KEY `idx_agentforge_writebacks_fact` (`agentforge_fact_id`)" .
+            ") ENGINE=InnoDB COMMENT='AgentForge chart writeback audit log'"
+        );
     }
 
     public function createDocumentRecord(
@@ -368,7 +390,7 @@ class AgentForgeDocumentStore
         ];
     }
 
-    public function recentFactSources(string $pid, int $limit = 12, string $message = ''): array
+    public function recentFactSources(string $pid, ?int $limit = null, string $message = ''): array
     {
         $this->ensureTables();
         $orderBy = "f.created_at DESC, f.id DESC";
@@ -379,16 +401,19 @@ class AgentForgeDocumentStore
             $medicationTerms = "medication|medications|meds|drug|dose|dosage|frequency|route|prescriber|metformin|lisinopril|atorvastatin|amlodipine|insulin";
             $orderBy = "CASE WHEN d.document_type = 'medication_list' OR LOWER(CONCAT_WS(' ', f.fact_type, f.label, f.value, d.original_filename)) REGEXP '" . $medicationTerms . "' THEN 0 ELSE 1 END, " . $orderBy;
         }
-        $result = sqlStatement(
-            "SELECT f.id, f.fact_type, f.label, f.value, f.unit, f.reference_range, f.abnormal_flag, f.recorded_at, " .
+        $sql = "SELECT f.id, f.fact_type, f.label, f.value, f.unit, f.reference_range, f.abnormal_flag, f.recorded_at, " .
             "f.confidence, f.citation_json, d.document_type, d.original_filename, d.openemr_document_id, d.created_at " .
             "FROM agentforge_extracted_facts f " .
             "JOIN agentforge_documents d ON d.id = f.agentforge_document_id " .
             "JOIN documents od ON od.id = d.openemr_document_id AND od.foreign_id = f.pid AND od.deleted = 0 " .
             "WHERE f.pid = ? " .
-            "ORDER BY " . $orderBy . " LIMIT ?",
-            [(int)$pid, $limit]
-        );
+            "ORDER BY " . $orderBy;
+        $bind = [(int)$pid];
+        if ($limit !== null) {
+            $sql .= " LIMIT ?";
+            $bind[] = $limit;
+        }
+        $result = sqlStatement($sql, $bind);
         $sources = [];
         while ($row = sqlFetchArray($result)) {
             $citation = json_decode((string)$row['citation_json'], true);

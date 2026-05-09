@@ -87,15 +87,20 @@ export function normalizeEncounters(payload: unknown): EncounterItem[] {
   return bundleResources<FhirResource>(payload, 'Encounter')
     .map((resource) => {
       const start = periodStart(resource.period) || stringValue(resource.date);
+      const end = periodEnd(resource.period);
       return {
         id: resourceId(resource),
         title: codeableText(resource.type) || codeableText(resource.class) || 'Encounter',
         detail: codeableText(resource.reasonCode) || stringValue(resource.serviceType) || 'Reason not recorded',
         meta: periodText(resource.period) || start,
         status: stringValue(resource.status) || 'unknown',
+        startDate: start,
+        endDate: end || undefined,
+        provider: encounterProvider(resource),
         dateSort: start ? Date.parse(start) || 0 : 0,
       };
     })
+    .filter((encounter) => encounter.startDate)
     .sort((left, right) => right.dateSort - left.dateSort);
 }
 
@@ -215,6 +220,22 @@ function periodStart(value: unknown): string {
   return isResource(value) ? stringValue(value.start) : '';
 }
 
+function periodEnd(value: unknown): string {
+  return isResource(value) ? stringValue(value.end) : '';
+}
+
+function encounterProvider(resource: FhirResource): string {
+  if (Array.isArray(resource.participant)) {
+    const provider = resource.participant
+      .map((participant) => (isResource(participant) ? referenceDisplay(participant.individual) : ''))
+      .find(Boolean);
+    if (provider) {
+      return provider;
+    }
+  }
+  return referenceDisplay(resource.serviceProvider);
+}
+
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
@@ -222,4 +243,3 @@ function stringValue(value: unknown): string {
 function titleCase(value: string): string {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : value;
 }
-

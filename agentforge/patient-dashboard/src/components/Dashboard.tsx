@@ -1,6 +1,7 @@
 import { ClinicalCard, ClinicalListItem } from './ClinicalCard';
+import { EncounterCalendar } from './EncounterCalendar';
 import { PatientHeader } from './PatientHeader';
-import { DashboardCard, DashboardData, DashboardSection } from '../fhir/types';
+import { ClinicalItem, DashboardCard, DashboardData, DashboardSection, EncounterItem, LoadState } from '../fhir/types';
 
 export function Dashboard({ data, embedded = false, onSignOut }: { data: DashboardData; embedded?: boolean; onSignOut?: () => void }) {
   const sections = data.sections || defaultSections(data, embedded);
@@ -40,11 +41,22 @@ function DashboardSectionView({ section }: { section: DashboardSection }) {
 }
 
 function DashboardCardView({ card }: { card: DashboardCard }) {
+  if (card.id === 'encounters') {
+    return (
+      <div className="af-dashboard-card--full">
+        <EncounterCalendar
+          state={card.state as LoadState<EncounterItem[]>}
+          emptyMessage={card.emptyMessage || 'No encounters recorded.'}
+        />
+      </div>
+    );
+  }
+
   const spanClass = card.span ? `af-dashboard-card--${card.span}` : '';
   return (
     <ClinicalCard
       title={card.title}
-      state={card.state}
+      state={card.state as LoadState<ClinicalItem[]>}
       emptyMessage={card.emptyMessage || 'Nothing recorded.'}
       className={spanClass}
       renderItem={(item) => <ClinicalListItem item={item} />}
@@ -68,7 +80,7 @@ function defaultSections(data: DashboardData, embedded: boolean): DashboardSecti
       id: 'care-context',
       cards: [
         { id: 'care-team', title: 'Care Team', state: data.careTeam, emptyMessage: `No care team entries ${emptySource}.` },
-        { id: 'encounters', title: 'Encounter History', state: data.encounters, emptyMessage: `No encounters ${emptySource}.` },
+        { id: 'encounters', title: 'Encounter History', state: data.encounters, emptyMessage: `No encounters ${emptySource}.`, span: 'full' },
       ],
     },
   ];

@@ -59,7 +59,7 @@ def mock_response(request: AgentForgeRequest, trace_id: str) -> AgentForgeRespon
             extracted_value=source.value,
             metadata=source.metadata,
         )
-        for source in request.evidence_bundle.sources[:10]
+        for source in request.evidence_bundle.sources
     ]
 
     claims: list[Claim] = []

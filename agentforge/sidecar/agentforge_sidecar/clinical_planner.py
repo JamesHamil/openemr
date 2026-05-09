@@ -23,10 +23,6 @@ AnswerFamily = Literal[
     "long_tail",
 ]
 
-DEFAULT_SELECTED_SOURCE_LIMIT = 12
-COMPLETE_MEDICATION_LIST_SOURCE_LIMIT = 24
-
-
 @dataclass(frozen=True)
 class EvidencePlan:
     answer_family: AnswerFamily
@@ -401,101 +397,75 @@ def _select_sources(
     request: AgentForgeRequest, family: AnswerFamily, secondary_families: tuple[AnswerFamily, ...] = ()
 ) -> list[EvidenceSource]:
     selected: list[EvidenceSource] = []
-    limit = _selected_source_limit(request, family, secondary_families)
     for item in (family, *secondary_families):
-        for source in _select_sources_for_family(request, item, limit):
+        for source in _select_sources_for_family(request, item):
             if source.id not in {existing.id for existing in selected}:
                 selected.append(source)
-            if len(selected) >= limit:
-                return selected
     return selected
 
 
 def _select_sources_for_family(
     request: AgentForgeRequest,
     family: AnswerFamily,
-    selected_source_limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
 ) -> list[EvidenceSource]:
     sources = request.evidence_bundle.sources
     selected: list[EvidenceSource] = []
 
-    def add(matches: list[EvidenceSource], limit: int) -> None:
-        added = 0
+    def add(matches: list[EvidenceSource], limit: int | None = None) -> None:
         for source in _newest_first(matches):
-            if added >= limit:
-                break
             if source.id not in {item.id for item in selected}:
                 selected.append(source)
-                added += 1
 
     if family == "allergies":
-        add(_by_type(sources, "allergy"), 8)
-        add(_medications_matching(sources, ("epinephrine", "auto-injector", "loratadine", "cetirizine", "fexofenadine", "diphenhydramine")), 4)
+        add(_by_type(sources, "allergy"))
+        add(_medications_matching(sources, ("epinephrine", "auto-injector", "loratadine", "cetirizine", "fexofenadine", "diphenhydramine")))
     elif family == "cardiac":
-        add(_problems_matching(sources, ("cardiac", "heart", "arrhythm", "cad", "chf", "mi", "angina", "hypertension")), 4)
-        add(_problems_matching(sources, ("hyperlipid", "prediabetes", "diabetes", "smoking")), 4)
-        add(_by_type(sources, "vital"), 4)
-        add(_by_type(sources, "note"), 2)
+        add(_problems_matching(sources, ("cardiac", "heart", "arrhythm", "cad", "chf", "mi", "angina", "hypertension")))
+        add(_problems_matching(sources, ("hyperlipid", "prediabetes", "diabetes", "smoking")))
+        add(_by_type(sources, "vital"))
+        add(_by_type(sources, "note"))
     elif family == "endocrine_metabolic":
-        add(_problems_matching(sources, ("prediabetes", "diabetes", "hyperlipid", "dyslipid", "obesity", "thyroid")), 6)
-        add(_labs_matching(sources, ("a1c", "glucose", "cholesterol", "ldl", "hdl", "triglyceride", "lipid")), 6)
+        add(_problems_matching(sources, ("prediabetes", "diabetes", "hyperlipid", "dyslipid", "obesity", "thyroid")))
+        add(_labs_matching(sources, ("a1c", "glucose", "cholesterol", "ldl", "hdl", "triglyceride", "lipid")))
     elif family == "oncology":
-        add(_problems_matching(sources, ("cancer", "neoplasm", "malignant", "carcinoma", "breast")), 6)
-        add(_by_type(sources, "note"), 2)
+        add(_problems_matching(sources, ("cancer", "neoplasm", "malignant", "carcinoma", "breast")))
+        add(_by_type(sources, "note"))
     elif family == "red_flags":
-        add(_problems_matching(sources, ("bullet", "miscarriage", "pregnancy", "neoplasm", "malignant")), 6)
-        add(_by_type(sources, "medication"), 6)
-        add(_by_type(sources, "note"), 2)
+        add(_problems_matching(sources, ("bullet", "miscarriage", "pregnancy", "neoplasm", "malignant")))
+        add(_by_type(sources, "medication"))
+        add(_by_type(sources, "note"))
     elif family == "med_reconciliation":
         current = [source for source in _by_type(sources, "medication") if source.metadata.get("status", "current") != "historical"]
         historical = [source for source in _by_type(sources, "medication") if source.metadata.get("status") == "historical"]
-        add(_medications_matching(current, ("epinephrine", "auto-injector", "loratadine")), 4)
-        add(current, 8)
-        add(_medication_document_fact_sources(sources), COMPLETE_MEDICATION_LIST_SOURCE_LIMIT)
-        add(historical, 6)
+        add(_medications_matching(current, ("epinephrine", "auto-injector", "loratadine")))
+        add(current)
+        if not current:
+            add(_medication_document_fact_sources(sources))
+        add(historical)
     elif family == "first_room":
-        add(_by_type(sources, "problem"), 3)
-        add(_by_type(sources, "medication"), 3)
-        add(_by_type(sources, "allergy"), 3)
-        add(_by_type(sources, "note"), 2)
-        add(_by_type(sources, "vital"), 1)
+        add(_by_type(sources, "problem"))
+        add(_by_type(sources, "medication"))
+        add(_by_type(sources, "allergy"))
+        add(_by_type(sources, "note"))
+        add(_by_type(sources, "vital"))
     elif family == "missing_data":
-        add(sources, 10)
+        add(sources)
     elif family == "change_since_review":
-        add(_by_type(sources, "note"), 8)
+        add(_by_type(sources, "note"))
     elif family == "labs":
-        add(_by_type(sources, "lab"), 8)
-        add(_lab_document_fact_sources(sources), 8)
+        add(_by_type(sources, "lab"))
+        add(_lab_document_fact_sources(sources))
     elif family == "document_facts":
-        add(_document_fact_sources_for_message(request), selected_source_limit)
+        add(_document_fact_sources_for_message(request))
         if _asks_patient_identity(request.message):
-            add(_by_type(sources, "demographic"), 3)
+            add(_by_type(sources, "demographic"))
     elif family == "broad_brief":
-        for record_type, limit in (
-            ("problem", 3),
-            ("medication", 3),
-            ("allergy", 3),
-            ("vital", 2),
-            ("lab", 2),
-            ("note", 2),
-        ):
-            add(_by_type(sources, record_type), limit)
+        for record_type in ("problem", "medication", "allergy", "vital", "lab", "note"):
+            add(_by_type(sources, record_type))
     else:
-        add(sources, 10)
+        add(sources)
 
-    return selected[:selected_source_limit]
-
-
-def _selected_source_limit(
-    request: AgentForgeRequest,
-    family: AnswerFamily,
-    secondary_families: tuple[AnswerFamily, ...] = (),
-) -> int:
-    families = (family, *secondary_families)
-    if any(item in {"med_reconciliation", "document_facts"} for item in families):
-        if _has_medication_list_document_sources(request.evidence_bundle.sources):
-            return COMPLETE_MEDICATION_LIST_SOURCE_LIMIT
-    return DEFAULT_SELECTED_SOURCE_LIMIT
+    return selected
 
 
 def _has_medication_list_document_sources(sources: list[EvidenceSource]) -> bool:

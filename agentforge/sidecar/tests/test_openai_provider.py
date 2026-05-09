@@ -571,7 +571,7 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertIn("Lisinopril: Lisinopril 10 mg daily", response.answer)
         self.assertIn("Metformin: Metformin 500 mg by mouth twice daily", response.answer)
 
-    def test_med_reconciliation_provider_keeps_complete_medication_list_selection(self):
+    def test_med_reconciliation_prefers_chart_prescriptions_after_writeback(self):
         request = _request().model_copy(update={"message": "What medications is this patient on?"})
         document_sources = [
             EvidenceSource(
@@ -612,9 +612,60 @@ class OpenAIProviderTest(unittest.TestCase):
         selected = _selected_sources(request, list(plan.selected_source_ids), _selected_source_limit(plan))
 
         self.assertEqual(_selected_source_limit(plan), 24)
-        self.assertEqual(len(selected), 19)
-        self.assertTrue(all(source.id in {item.id for item in selected} for source in document_sources))
+        self.assertEqual(len(selected), 3)
+        self.assertFalse(any(source.id in {item.id for item in selected} for source in document_sources))
         self.assertTrue(all(source.id in {item.id for item in selected} for source in chart_sources))
+
+    def test_med_reconciliation_returns_all_selected_current_medications(self):
+        request = _request().model_copy(update={"message": "What medications is this patient on?"})
+        medication_list_sources = [
+            EvidenceSource(
+                id=f"medication-list-{index}",
+                record_type="medication",
+                recorded_at=f"2026-05-05T01:{index:02d}:00Z",
+                field_path="lists.title",
+                value=f"Medication {index}; instructions frequency: 1 daily",
+                metadata={"status": "current", "source_table": "lists", "issue_type": "medication"},
+            )
+            for index in range(1, 17)
+        ]
+        prescription_sources = [
+            EvidenceSource(
+                id=f"medication-rx-{index}",
+                record_type="medication",
+                recorded_at=f"2026-05-05T00:{index:02d}:00Z",
+                field_path="prescriptions.drug",
+                value=f"Prescription {index}",
+                metadata={"status": "current", "source_table": "prescriptions"},
+            )
+            for index in range(1, 4)
+        ]
+        request = request.model_copy(
+            update={
+                "evidence_bundle": request.evidence_bundle.model_copy(
+                    update={
+                        "sources": [*medication_list_sources, *prescription_sources],
+                        "adapter_status": [AdapterStatus(adapter="medications", status="success")],
+                    }
+                )
+            }
+        )
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.model_call_count, 0)
+        self.assertEqual(diagnostics.selected_source_count, 19)
+        self.assertEqual(len(response.claims), 19)
+        self.assertEqual(len(response.sources), 19)
+        self.assertIn("Medication 16", response.answer)
+        self.assertIn("Prescription 3", response.answer)
 
     def test_openai_response_intake_summary_skips_tool_phase_and_keeps_compose_payload_narrow(self):
         request = _request().model_copy(update={"message": "I need to know about this patient's intake form"})

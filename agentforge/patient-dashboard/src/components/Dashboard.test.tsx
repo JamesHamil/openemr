@@ -37,7 +37,13 @@ describe('dashboard', () => {
     expect(screen.getByRole('heading', { name: 'Medications' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Prescriptions' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Care Team' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Encounter History' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Visit History' })).toBeInTheDocument();
+    expect(screen.getByText('May 2026')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Day' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Week' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Month' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All' })).toBeInTheDocument();
+    expect(screen.getByText('Visits on May 5, 2026')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Demographics' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Appointments' })).toBeInTheDocument();
   });
@@ -54,7 +60,7 @@ function dashboardData(): DashboardData {
     medications: { status: 'loaded', data: [{ id: 'm1', title: 'Metformin' }] },
     prescriptions: { status: 'loaded', data: [{ id: 'r1', title: 'Atorvastatin' }] },
     careTeam: { status: 'loaded', data: [{ id: 't1', title: 'Primary Care Team' }] },
-    encounters: { status: 'loaded', data: [{ id: 'e1', title: 'Office Visit', dateSort: 1 }] },
+    encounters: { status: 'loaded', data: [{ id: 'e1', title: 'Office Visit', detail: 'Follow-up', startDate: '2026-05-05', dateSort: 1 }] },
     sections: [
       {
         id: 'clinical',
@@ -69,7 +75,7 @@ function dashboardData(): DashboardData {
         id: 'dashboard',
         cards: [
           { id: 'care-team', title: 'Care Team', state: { status: 'loaded', data: [{ id: 't1', title: 'Primary Care Team' }] } },
-          { id: 'encounters', title: 'Encounter History', state: { status: 'loaded', data: [{ id: 'e1', title: 'Office Visit' }] } },
+          { id: 'encounters', title: 'Encounter History', state: { status: 'loaded', data: [{ id: 'e1', title: 'Office Visit', detail: 'Follow-up', startDate: '2026-05-05', dateSort: 1 }] } },
           { id: 'demographics', title: 'Demographics', state: { status: 'loaded', data: [{ id: 'd1', title: 'Phone', detail: '(217) 555-0198' }] } },
           { id: 'appointments', title: 'Appointments', state: { status: 'loaded', data: [] } },
         ],

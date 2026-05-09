@@ -159,6 +159,17 @@ function renderAgentForgeExtractionPreview(payload) {
     updateAgentForgeFactControls();
 }
 
+function formatAgentForgeChartWritebackSummary(payload) {
+    let writeback = payload.chart_writeback || {};
+    let applied = Number(writeback.applied || 0);
+    if (!applied) {
+        return '';
+    }
+    let updated = Number(writeback.updated || 0);
+    let inserted = Number(writeback.inserted || 0);
+    return ' Chart writeback: ' + applied + ' applied (' + updated + ' updated, ' + inserted + ' inserted). Refresh the chart tab to see updated OpenEMR data.';
+}
+
 function renderAgentForgeFactRows() {
     let tableBody = $('#agentforgeFactTableBody');
     let factJson = $('#agentforgeFactJson');
@@ -435,7 +446,8 @@ function loadAgentForgeStoredFacts(docid, patientId) {
         renderAgentForgeExtractionPreview(payload);
         let facts = (payload.extraction && payload.extraction.extracted_facts) || [];
         status.removeClass('text-muted text-danger text-warning').addClass('text-success').text(
-            {xlj t='Loaded saved AgentForge facts:'} + ' ' + facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
+            {xlj t='Loaded saved AgentForge facts:'} + ' ' + facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} +
+            formatAgentForgeChartWritebackSummary(payload)
         );
     }).catch(function () {
         status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='Unable to load saved AgentForge facts.'});
@@ -588,7 +600,7 @@ function renderAgentForgeCitationPreview(fact, index) {
         return;
     }
     if (isAgentForgeImageDocument()) {
-        renderAgentForgeImageCitation(citation);
+        renderAgentForgeImageCitation(fact, index);
         return;
     }
     $('#agentforgeCitationStatus').text({xlj t='Visual preview is unavailable for this document type.'});
@@ -654,14 +666,20 @@ function renderAgentForgePdfCitation(fact) {
     });
 }
 
-function renderAgentForgeImageCitation(citation) {
+function renderAgentForgeImageCitation(fact, index) {
+    let citation = fact.citation || {};
     let stage = $('#agentforgeCitationStage');
     let image = $('<img class="agentforge-citation-image" alt="">');
     let pageNode = $('<div class="agentforge-citation-page"></div>');
     image.on('load', function () {
-        if (hasAgentForgeBoundingBox(citation)) {
-            addAgentForgeHighlight(pageNode, citation.bounding_box);
-            $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation) + ' | model-provided highlight');
+        let rowBox = resolveAgentForgeImageRowBox(image[0], fact, index);
+        let modelBox = hasAgentForgeBoundingBox(citation) ? citation.bounding_box : null;
+        let highlightBox = rowBox || modelBox;
+        if (highlightBox) {
+            addAgentForgeHighlight(pageNode, highlightBox, rowBox ? 'row' : 'model');
+            $('#agentforgeCitationStatus').text(
+                formatAgentForgeCitation(citation) + (rowBox ? ' | UI row-aligned highlight' : ' | model-provided highlight')
+            );
         } else {
             $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation));
         }
@@ -672,6 +690,101 @@ function renderAgentForgeImageCitation(citation) {
     stage.empty().append(pageNode);
     pageNode.append(image);
     image.attr('src', agentforgeDocumentContentUrl);
+}
+
+function resolveAgentForgeImageRowBox(imageElement, fact, index) {
+    let rowIndex = extractAgentForgeMedicationRowIndex(fact, index);
+    if (rowIndex < 1 || !imageElement || !imageElement.naturalWidth || !imageElement.naturalHeight) {
+        return null;
+    }
+
+    try {
+        let canvas = document.createElement('canvas');
+        canvas.width = imageElement.naturalWidth;
+        canvas.height = imageElement.naturalHeight;
+        let context = canvas.getContext('2d', {ldelim}willReadFrequently: true{rdelim});
+        context.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
+        let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        let clusters = detectAgentForgeInkRowClusters(imageData, canvas.width, canvas.height);
+        if (!clusters.length) {
+            return null;
+        }
+        let cluster = clusters[rowIndex] || clusters[rowIndex - 1] || null;
+        if (!cluster) {
+            return null;
+        }
+        let padY = Math.max(2, Math.round(canvas.height * 0.006));
+        let y = Math.max(0, cluster.start - padY);
+        let height = Math.min(canvas.height - y, (cluster.end - cluster.start) + padY * 2);
+        return {ldelim}
+            x: 0.02,
+            y: y / canvas.height,
+            width: 0.96,
+            height: Math.max(height / canvas.height, 0.025)
+        {rdelim};
+    } catch (e) {
+        return null;
+    }
+}
+
+function extractAgentForgeMedicationRowIndex(fact, index) {
+    let citation = fact.citation || {};
+    let candidates = [
+        citation.field_or_chunk_id || '',
+        fact.fact_type || '',
+        fact.label || ''
+    ];
+    for (let i = 0; i < candidates.length; i++) {
+        let match = String(candidates[i]).match(/medication[_-](\d+)/i);
+        if (match) {
+            return Number(match[1]);
+        }
+    }
+    return Number(index) + 1;
+}
+
+function detectAgentForgeInkRowClusters(imageData, width, height) {
+    let rows = [];
+    let data = imageData.data;
+    let threshold = Math.max(8, Math.floor(width * 0.012));
+    for (let y = 0; y < height; y += 1) {
+        let darkPixels = 0;
+        for (let x = 0; x < width; x += 2) {
+            let offset = ((y * width) + x) * 4;
+            let alpha = data[offset + 3];
+            if (alpha < 20) {
+                continue;
+            }
+            let red = data[offset];
+            let green = data[offset + 1];
+            let blue = data[offset + 2];
+            if (red < 170 && green < 170 && blue < 170) {
+                darkPixels++;
+            }
+        }
+        if (darkPixels >= threshold) {
+            rows.push(y);
+        }
+    }
+    if (!rows.length) {
+        return [];
+    }
+    let clusters = [];
+    let start = rows[0];
+    let previous = rows[0];
+    rows.slice(1).forEach(function (row) {
+        if (row - previous > 3) {
+            clusters.push({ldelim}start: start, end: previous{rdelim});
+            start = row;
+        }
+        previous = row;
+    });
+    clusters.push({ldelim}start: start, end: previous{rdelim});
+    return clusters.filter(function (cluster) {
+        return (cluster.end - cluster.start) >= 3 && cluster.start > Math.floor(height * 0.05);
+    }).sort(function (left, right) {
+        return left.start - right.start;
+    });
 }
 
 function agentForgeCitationPage(citation) {
@@ -808,7 +921,8 @@ function extractWithAgentForge(docid, patientId) {
         let statusClass = extractionStatus === 'failed' ? 'text-danger' : 'text-success';
         status.removeClass('text-muted text-danger text-success text-warning').addClass(statusClass).text(
             {xlj t='AgentForge extraction'} + ' ' + (extraction.extraction_status || 'unknown') + ': ' +
-            facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} + ' ' + traceId
+            facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} + ' ' + traceId +
+            formatAgentForgeChartWritebackSummary(payload)
         );
     }).catch(function () {
         status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='AgentForge extraction failed before a response was returned.'});

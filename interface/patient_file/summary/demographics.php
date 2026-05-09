@@ -252,7 +252,7 @@ function agentforgeModernDashboardBuildData($pid, array $patient, $employer = []
         fn($issue): array => agentforgeModernDashboardItem(
             $issue['id'] ?? $issue['uuid'] ?? '',
             $issue['title'] ?? $issue['diagnosis'] ?? '',
-            $issue['comments'] ?? '',
+            $issue['medication']['drug_dosage_instructions'] ?? ($issue['comments'] ?? ''),
             $issue['begdate'] ?? '',
             agentforgeModernDashboardIssueStatus($issue)
         ),

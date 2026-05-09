@@ -27,13 +27,16 @@ export interface ClinicalItem {
 }
 
 export interface EncounterItem extends ClinicalItem {
+  startDate: string;
+  endDate?: string;
+  provider?: string;
   dateSort: number;
 }
 
 export interface DashboardCard {
   id: string;
   title: string;
-  state: LoadState<ClinicalItem[]>;
+  state: LoadState<ClinicalItem[]> | LoadState<EncounterItem[]>;
   emptyMessage?: string;
   span?: 'wide' | 'full';
 }

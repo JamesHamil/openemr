@@ -72,10 +72,6 @@ LAB_DOCUMENT_FACT_TERMS = (
 )
 
 
-DEFAULT_SELECTED_SOURCE_LIMIT = 10
-COMPLETE_MEDICATION_LIST_SOURCE_LIMIT = 24
-
-
 COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist preparing for rounds.
 Use only the selected evidence provided in this request payload. Never provide treatment directives,
 orders, diagnoses, or medication changes. Every factual clinical claim must cite source_ids from selected evidence.
@@ -663,7 +659,7 @@ def _source_ids_tool_phase_result(
         source_by_id[source_id]
         for source_id in selected_source_ids
         if source_id in source_by_id
-    ][:8]
+    ]
     return ToolPhaseResult(
         selected_source_ids=list(selected_source_ids),
         drafted_claims=[
@@ -772,12 +768,12 @@ def _is_lab_question(message: str) -> bool:
 def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
     if evidence_plan.answer_family != "labs" and "labs" not in evidence_plan.needed_adapters:
         return []
-    matches = search_sources(request, request.message, ["lab"], 6)
+    matches = search_sources(request, request.message, ["lab"], None)
     return [
         str(match["id"])
         for match in matches
         if match.get("record_type") in {"lab", "document_fact"}
-    ][:6]
+    ]
 
 
 def _plan_needs_lab_augmentation(evidence_plan: EvidencePlan, selected_sources: list[EvidenceSource]) -> bool:
@@ -801,7 +797,7 @@ def _schema_intake_contact_source_ids_for_question(request: AgentForgeRequest) -
         if _is_relevant_emergency_contact_source(request.message, source)
     ]
     matches.sort(key=_contact_source_sort_key)
-    return [source.id for source in matches[:4]]
+    return [source.id for source in matches]
 
 
 def _is_relevant_emergency_contact_source(message: str, source: EvidenceSource) -> bool:
@@ -833,7 +829,7 @@ def _schema_phone_source_ids_for_question(request: AgentForgeRequest) -> list[st
         if _is_relevant_phone_source(request.message, source)
     ]
     matches.sort(key=_phone_source_sort_key)
-    return [source.id for source in matches[:6]]
+    return [source.id for source in matches]
 
 
 def _is_phone_number_question(message: str) -> bool:
@@ -921,8 +917,6 @@ def _limit_response(response: AgentForgeResponse, selected_sources: list[Evidenc
         if not candidate_source_ids:
             continue
         new_source_ids = [source_id for source_id in candidate_source_ids if source_id not in kept_source_ids]
-        if len(kept_claims) >= 8 or len(kept_source_ids) + len(new_source_ids) > 10:
-            continue
         kept_claims.append(claim.model_copy(update={"source_ids": candidate_source_ids}))
         kept_claim_ids.add(claim.id)
         kept_source_ids.extend(new_source_ids)
@@ -931,7 +925,7 @@ def _limit_response(response: AgentForgeResponse, selected_sources: list[Evidenc
         _response_source_from_evidence(selected_by_id[source_id])
         for source_id in kept_source_ids
         if source_id in selected_by_id
-    ][:10]
+    ]
 
     sections = []
     for section in response.sections:
@@ -998,6 +992,8 @@ def _deterministic_document_fact_response(
     schema_expansion: dict,
     trace_id: str,
 ) -> AgentForgeResponse | None:
+    if evidence_plan.answer_family == "med_reconciliation":
+        return _deterministic_medication_response(selected_sources, trace_id)
     if evidence_plan.answer_family == "labs":
         return _deterministic_lab_response(request, selected_sources, trace_id)
     if evidence_plan.answer_family != "document_facts":
@@ -1042,6 +1038,76 @@ def _deterministic_document_fact_response(
     )
 
 
+def _deterministic_medication_response(
+    selected_sources: list[EvidenceSource],
+    trace_id: str,
+) -> AgentForgeResponse | None:
+    medication_sources = [
+        source
+        for source in selected_sources
+        if source.record_type == "medication" and source.metadata.get("status", "current") != "historical"
+    ]
+    if not medication_sources:
+        return None
+
+    labels = [_medication_source_label(source) for source in medication_sources]
+    answer = "Current medications found: " + "; ".join(labels) + "."
+    claims = [
+        Claim(
+            id=f"claim-{index + 1}",
+            text=f"{label} is listed as a current medication.",
+            claim_type="medication",
+            source_ids=[source.id],
+            support_status="supported",
+        )
+        for index, (source, label) in enumerate(zip(medication_sources, labels, strict=False))
+    ]
+    return AgentForgeResponse(
+        answer=answer,
+        sections=[
+            ResponseSection(
+                id="current-medications",
+                title="Current Medications",
+                claim_ids=[claim.id for claim in claims],
+            )
+        ],
+        claims=claims,
+        sources=[_response_source_from_evidence(source) for source in medication_sources],
+        warnings=[],
+        blocked_claims=[],
+        verification_status="verified",
+        trace_id=trace_id,
+        debug_trace={
+            "deterministic_answer": {
+                "reason": "structured_medication_list_lookup",
+                "source_ids": [source.id for source in medication_sources],
+            }
+        },
+    )
+
+
+def _medication_source_label(source: EvidenceSource) -> str:
+    value = source.value.strip()
+    if value == "":
+        return source.id
+    parts = [part.strip() for part in value.split(";") if part.strip()]
+    name = parts[0]
+    instructions = []
+    for part in parts[1:]:
+        cleaned = part.strip()
+        if not cleaned or cleaned.endswith(":"):
+            continue
+        if cleaned.lower().startswith("instructions "):
+            cleaned = cleaned[len("instructions ") :].strip()
+        if cleaned.lower().startswith("frequency:"):
+            cleaned = cleaned[len("frequency:") :].strip()
+        if cleaned:
+            instructions.append(cleaned)
+    if not instructions:
+        return name
+    return f"{name} ({'; '.join(instructions)})"
+
+
 def _deterministic_lab_response(
     request: AgentForgeRequest,
     selected_sources: list[EvidenceSource],
@@ -1051,7 +1117,7 @@ def _deterministic_lab_response(
     if not lab_sources:
         return None
 
-    result_phrases = [_lab_fact_phrase(source) for source in lab_sources[:8]]
+    result_phrases = [_lab_fact_phrase(source) for source in lab_sources]
     answer = "Lab results available: " + "; ".join(result_phrases) + "."
     claims = [
         Claim(
@@ -1061,7 +1127,7 @@ def _deterministic_lab_response(
             source_ids=[source.id],
             support_status="supported",
         )
-        for index, (source, phrase) in enumerate(zip(lab_sources[:8], result_phrases, strict=False))
+        for index, (source, phrase) in enumerate(zip(lab_sources, result_phrases, strict=False))
     ]
     return AgentForgeResponse(
         answer=answer,
@@ -1073,7 +1139,7 @@ def _deterministic_lab_response(
             )
         ],
         claims=claims,
-        sources=[_response_source_from_evidence(source) for source in lab_sources[:8]],
+        sources=[_response_source_from_evidence(source) for source in lab_sources],
         warnings=[],
         blocked_claims=[],
         verification_status="verified",
@@ -1081,7 +1147,7 @@ def _deterministic_lab_response(
         debug_trace={
             "deterministic_answer": {
                 "reason": "structured_lab_fact_lookup",
-                "source_ids": [source.id for source in lab_sources[:8]],
+                "source_ids": [source.id for source in lab_sources],
             }
         },
     )
@@ -1143,8 +1209,6 @@ def _is_direct_document_fact_lookup(
     groups = set(schema_expansion.get("groups", []))
     if groups & {"phone_numbers", "intake_contact", "pharmacy", "insurance"}:
         return True
-    if len(document_sources) > 6:
-        return False
     normalized = " ".join(request.message.lower().split())
     return any(
         term in normalized
@@ -1438,7 +1502,7 @@ def _repair_response(
 def _selected_sources(
     request: AgentForgeRequest,
     source_ids: list[str] | tuple[str, ...],
-    limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
+    limit: int | None = None,
 ):
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     selected = []
@@ -1449,7 +1513,7 @@ def _selected_sources(
         if any(existing.id == source.id for existing in selected):
             continue
         selected.append(source)
-        if len(selected) >= limit:
+        if limit is not None and len(selected) >= limit:
             break
     return selected
 
@@ -1480,26 +1544,20 @@ def _model_response_to_agent_response(response: ModelAgentForgeResponse, trace_i
 
 def _merge_source_ids(
     *source_id_groups: list[str] | tuple[str, ...],
-    limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
+    limit: int | None = None,
 ) -> list[str]:
     merged: list[str] = []
     for source_ids in source_id_groups:
         for source_id in source_ids:
             if source_id not in merged:
                 merged.append(source_id)
-            if len(merged) >= limit:
+            if limit is not None and len(merged) >= limit:
                 return merged
     return merged
 
 
-def _selected_source_limit(evidence_plan: EvidencePlan) -> int:
-    if evidence_plan.answer_family in {"med_reconciliation", "document_facts"}:
-        if any(
-            "document-fact" in source_id
-            for source_id in evidence_plan.selected_source_ids
-        ):
-            return COMPLETE_MEDICATION_LIST_SOURCE_LIMIT
-    return DEFAULT_SELECTED_SOURCE_LIMIT
+def _selected_source_limit(evidence_plan: EvidencePlan) -> int | None:
+    return None
 
 
 def _plan_payload(plan: EvidencePlan) -> dict:

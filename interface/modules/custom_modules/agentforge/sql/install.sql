@@ -20,6 +20,30 @@ CREATE TABLE IF NOT EXISTS `agentforge_documents` (
 ) ENGINE=InnoDB COMMENT='AgentForge OpenEMR document extraction tracking';
 #EndIf
 
+#IfNotTable agentforge_chart_writebacks
+CREATE TABLE IF NOT EXISTS `agentforge_chart_writebacks` (
+    `id` BIGINT NOT NULL AUTO_INCREMENT,
+    `pid` BIGINT NOT NULL,
+    `agentforge_document_id` BIGINT NOT NULL,
+    `openemr_document_id` BIGINT DEFAULT NULL,
+    `agentforge_fact_id` BIGINT DEFAULT NULL,
+    `target_table` VARCHAR(64) NOT NULL,
+    `target_field` VARCHAR(120) NOT NULL DEFAULT '',
+    `target_record_id` VARCHAR(120) NOT NULL DEFAULT '',
+    `old_value` TEXT DEFAULT NULL,
+    `new_value` TEXT DEFAULT NULL,
+    `action` VARCHAR(32) NOT NULL,
+    `status` VARCHAR(32) NOT NULL,
+    `trace_id` VARCHAR(120) DEFAULT NULL,
+    `message` TEXT DEFAULT NULL,
+    `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`id`),
+    KEY `idx_agentforge_writebacks_pid` (`pid`),
+    KEY `idx_agentforge_writebacks_document` (`agentforge_document_id`),
+    KEY `idx_agentforge_writebacks_fact` (`agentforge_fact_id`)
+) ENGINE=InnoDB COMMENT='AgentForge chart writeback audit log';
+#EndIf
+
 #IfNotTable agentforge_extracted_facts
 CREATE TABLE IF NOT EXISTS `agentforge_extracted_facts` (
     `id` BIGINT NOT NULL AUTO_INCREMENT,

@@ -210,20 +210,520 @@
   padding: 0.05rem 0.35rem;
 }
 
+.af-visit-history-card {
+  background: #ffffff;
+  border: 1px solid #d7dde7;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.af-visit-history-card__header {
+  align-items: center;
+  border-bottom: 1px solid #e2e7ef;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+}
+
+.af-visit-history-card__header h2 {
+  font-size: 1.05rem;
+  line-height: 1.2;
+  margin: 0;
+}
+
+.af-visit-history-card__count,
+.af-visit-list__header span {
+  background: #eef2f7;
+  border: 1px solid #d7dde7;
+  border-radius: 999px;
+  color: #3c4658;
+  font-size: 0.78rem;
+  font-weight: 700;
+  min-width: 1.7rem;
+  padding: 0.05rem 0.45rem;
+  text-align: center;
+}
+
+.af-visit-history-card__tools {
+  align-items: end;
+  display: grid;
+  gap: 0.6rem;
+  justify-items: end;
+}
+
+.af-visit-view-switch {
+  background: #f5f7fa;
+  border: 1px solid #d7dde7;
+  border-radius: 6px;
+  display: inline-grid;
+  grid-template-columns: repeat(4, minmax(4.25rem, 1fr));
+  overflow: hidden;
+}
+
+.af-visit-view-switch button {
+  background: transparent;
+  border: 0;
+  color: #3c4658;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 800;
+  min-height: 2rem;
+  padding: 0.28rem 0.65rem;
+}
+
+.af-visit-view-switch button + button {
+  border-left: 1px solid #d7dde7;
+}
+
+.af-visit-view-switch button[aria-pressed="true"] {
+  background: #2f6fed;
+  color: #ffffff;
+}
+
+.af-visit-history-card__controls {
+  align-items: center;
+  display: grid;
+  gap: 0.5rem;
+  grid-template-columns: auto minmax(12rem, 1fr) auto;
+}
+
+.af-visit-history-card__controls button {
+  background: #ffffff;
+  border: 1px solid #aeb8c7;
+  border-radius: 5px;
+  color: #141923;
+  cursor: pointer;
+  font-size: 0.84rem;
+  font-weight: 700;
+  min-height: 2rem;
+  padding: 0.28rem 0.55rem;
+}
+
+.af-visit-history-card__controls button:disabled {
+  color: #9aa4b2;
+  cursor: not-allowed;
+}
+
+.af-visit-history-card__controls span {
+  color: #3c4658;
+  font-size: 0.9rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.af-visit-history-card__body {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr) minmax(18rem, 0.36fr);
+  padding: 1rem;
+}
+
+.af-visit-calendar {
+  background: #f7f9fc;
+  border: 1px solid #e2e7ef;
+  border-radius: 6px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  overflow: hidden;
+}
+
+.af-visit-calendar__weekday {
+  background: #eef2f7;
+  color: #657184;
+  font-size: 0.72rem;
+  font-weight: 800;
+  padding: 0.45rem 0.55rem;
+  text-transform: uppercase;
+}
+
+.af-visit-calendar__day {
+  background: #ffffff;
+  border-bottom: 0;
+  border-left: 0;
+  border-right: 1px solid #e8edf3;
+  border-top: 1px solid #e8edf3;
+  color: #141923;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+  min-height: 6.3rem;
+  min-width: 0;
+  padding: 0.5rem;
+  text-align: left;
+}
+
+.af-visit-calendar__day:nth-child(7n + 7) {
+  border-right: 0;
+}
+
+.af-visit-calendar__day--muted {
+  background: #f7f9fc;
+  color: #9aa4b2;
+}
+
+.af-visit-calendar__day--today .af-visit-calendar__date {
+  background: #2f6fed;
+  color: #ffffff;
+}
+
+.af-visit-calendar__day--selected {
+  background: #f3fbfc;
+  outline: 2px solid #2c8c99;
+  outline-offset: -2px;
+}
+
+.af-visit-calendar__day--has-visit {
+  box-shadow: inset 0 3px 0 #2c8c99;
+}
+
+.af-visit-calendar__day:hover {
+  background: #f8fcfd;
+}
+
+.af-visit-calendar--week .af-visit-calendar__day {
+  min-height: 18rem;
+}
+
+.af-visit-calendar__date {
+  align-items: center;
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.78rem;
+  font-weight: 800;
+  height: 1.45rem;
+  justify-content: center;
+  width: 1.45rem;
+}
+
+.af-visit-calendar__chip,
+.af-visit-calendar__more {
+  background: #e7f4f6;
+  border: 1px solid #b9dde3;
+  border-radius: 4px;
+  color: #1f5963;
+  display: block;
+  font-size: 0.73rem;
+  font-weight: 700;
+  line-height: 1.25;
+  overflow: hidden;
+  padding: 0.18rem 0.28rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.af-visit-calendar__more {
+  background: #f5f7fa;
+  border-color: #d7dde7;
+  color: #657184;
+}
+
+.af-visit-list {
+  border-left: 1px solid #e2e7ef;
+  min-width: 0;
+  padding-left: 1rem;
+}
+
+.af-visit-list__header {
+  align-items: start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  margin-bottom: 0.65rem;
+}
+
+.af-visit-list__header h3 {
+  font-size: 0.95rem;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.af-visit-list__header p {
+  color: #657184;
+  font-size: 0.8rem;
+  font-weight: 700;
+  margin: 0.12rem 0 0;
+}
+
+.af-visit-list ol {
+  display: grid;
+  gap: 0.7rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.af-visit-list li {
+  align-items: start;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: 5rem minmax(0, 1fr);
+}
+
+.af-visit-list time {
+  background: #f5f7fa;
+  border: 1px solid #e2e7ef;
+  border-radius: 5px;
+  color: #3c4658;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0.4rem;
+  text-align: center;
+}
+
+.af-visit-list strong,
+.af-visit-list p,
+.af-visit-list span {
+  overflow-wrap: anywhere;
+}
+
+.af-visit-list strong {
+  display: block;
+  line-height: 1.25;
+}
+
+.af-visit-list p {
+  color: #3c4658;
+  font-size: 0.88rem;
+  margin: 0.14rem 0;
+}
+
+.af-visit-list span {
+  color: #657184;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.af-visit-list__empty {
+  background: #f7f9fc;
+  border: 1px dashed #cdd5e1;
+  border-radius: 6px;
+  color: #657184;
+  padding: 0.8rem;
+}
+
+.af-visit-day-view {
+  background: #ffffff;
+  border: 1px solid #e2e7ef;
+  border-radius: 6px;
+  min-height: 28rem;
+  padding: 1rem;
+}
+
+.af-visit-day-view__date {
+  border-bottom: 1px solid #e2e7ef;
+  margin-bottom: 1rem;
+  padding-bottom: 0.8rem;
+}
+
+.af-visit-day-view__date span {
+  color: #657184;
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.af-visit-day-view__date strong {
+  display: block;
+  font-size: 1.35rem;
+  line-height: 1.25;
+  margin-top: 0.15rem;
+}
+
+.af-visit-day-view ol {
+  display: grid;
+  gap: 0.8rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.af-visit-day-view li {
+  border: 1px solid #e2e7ef;
+  border-radius: 6px;
+  padding: 0.8rem;
+}
+
+.af-visit-day-view time {
+  color: #657184;
+  display: block;
+  font-size: 0.78rem;
+  font-weight: 800;
+  margin-bottom: 0.35rem;
+}
+
+.af-visit-day-view strong,
+.af-visit-day-view p,
+.af-visit-day-view span {
+  overflow-wrap: anywhere;
+}
+
+.af-visit-day-view p {
+  color: #3c4658;
+  margin: 0.25rem 0;
+}
+
+.af-visit-day-view span {
+  color: #657184;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.af-visit-all-view {
+  grid-column: 1 / -1;
+}
+
+.af-visit-all-view__header {
+  align-items: center;
+  border-bottom: 1px solid #e2e7ef;
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.8rem;
+  padding-bottom: 0.8rem;
+}
+
+.af-visit-all-view__header h3 {
+  font-size: 1rem;
+  line-height: 1.25;
+  margin: 0;
+}
+
+.af-visit-all-view__header p {
+  color: #657184;
+  font-size: 0.82rem;
+  font-weight: 700;
+  margin: 0.15rem 0 0;
+}
+
+.af-visit-all-view ol {
+  display: grid;
+  gap: 0.55rem;
+  list-style: none;
+  margin: 0;
+  max-height: 34rem;
+  overflow: auto;
+  padding: 0;
+}
+
+.af-visit-all-view li button {
+  align-items: start;
+  background: #ffffff;
+  border: 1px solid #e2e7ef;
+  border-radius: 6px;
+  color: #141923;
+  cursor: pointer;
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: 6.5rem minmax(0, 1fr);
+  padding: 0.75rem;
+  text-align: left;
+  width: 100%;
+}
+
+.af-visit-all-view li button:hover {
+  background: #f8fcfd;
+  border-color: #b9dde3;
+}
+
+.af-visit-all-view time {
+  background: #f5f7fa;
+  border: 1px solid #e2e7ef;
+  border-radius: 5px;
+  color: #3c4658;
+  font-size: 0.78rem;
+  font-weight: 800;
+  padding: 0.42rem;
+  text-align: center;
+}
+
+.af-visit-all-view strong,
+.af-visit-all-view small,
+.af-visit-all-view em {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.af-visit-all-view strong {
+  font-size: 0.95rem;
+  line-height: 1.25;
+}
+
+.af-visit-all-view small {
+  color: #3c4658;
+  font-size: 0.86rem;
+  margin-top: 0.12rem;
+}
+
+.af-visit-all-view em {
+  color: #657184;
+  font-size: 0.78rem;
+  font-style: normal;
+  font-weight: 700;
+  margin-top: 0.25rem;
+}
+
 .af-dashboard-button {
   background: #2f6fed;
   border: 1px solid #265bc4;
   border-radius: 5px;
   color: #ffffff;
   cursor: pointer;
+  display: inline-block;
   font-weight: 700;
   padding: 0.48rem 0.75rem;
+  text-decoration: none;
 }
 
 .af-dashboard-button--secondary {
   background: #ffffff;
   border-color: #aeb8c7;
   color: #141923;
+}
+
+.af-dashboard-button--info {
+  background: #4fa3b5;
+  border-color: #438b9b;
+}
+
+.af-visit-history-page {
+  box-sizing: border-box;
+  margin: 0 auto;
+  max-width: 112rem;
+  padding: 1rem;
+  width: 100%;
+}
+
+.af-visit-history-page__toolbar {
+  align-items: end;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.af-visit-history-page__toolbar h1 {
+  font-size: 1.45rem;
+  line-height: 1.2;
+  margin: 0 0 0.2rem;
+}
+
+.af-visit-history-page__toolbar p {
+  font-weight: 700;
+  margin: 0;
+}
+
+.af-visit-history-page__toolbar span {
+  margin-left: 1rem;
+}
+
+.af-visit-history-page__actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: flex-end;
 }
 
 .center-panel {
@@ -269,6 +769,64 @@
   }
 
   .af-dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .af-visit-history-card__header,
+  .af-visit-history-card__body {
+    grid-template-columns: 1fr;
+  }
+
+  .af-visit-history-card__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .af-visit-history-card__tools {
+    justify-items: stretch;
+  }
+
+  .af-visit-list {
+    border-left: 0;
+    border-top: 1px solid #e2e7ef;
+    padding-left: 0;
+    padding-top: 1rem;
+  }
+
+  .af-visit-history-page__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .af-visit-history-page__actions {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 620px) {
+  .af-visit-calendar__day {
+    min-height: 4.9rem;
+    padding: 0.35rem;
+  }
+
+  .af-visit-calendar__chip {
+    font-size: 0.68rem;
+  }
+
+  .af-visit-history-card__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .af-visit-view-switch {
+    grid-template-columns: 1fr;
+  }
+
+  .af-visit-view-switch button + button {
+    border-left: 0;
+    border-top: 1px solid #d7dde7;
+  }
+
+  .af-visit-list li {
     grid-template-columns: 1fr;
   }
 }

@@ -7,9 +7,6 @@ from dataclasses import dataclass
 from .schemas import AgentForgeRequest, EvidenceSource, ToolCallResult, ToolName, ToolPhaseResult
 
 MAX_TOOL_CALLS = 6
-MAX_TOOL_RESULTS = 8
-MAX_SELECTED_SOURCES = 10
-
 FALLBACK_RECORD_TYPE_ORDER = ["problem", "allergy", "medication", "lab", "document_fact", "guideline", "vital", "note", "demographic"]
 LAB_DOCUMENT_FACT_HINTS = {
     "a1c",
@@ -338,9 +335,6 @@ def run_tool_phase(
         if source_id in selected_source_ids:
             continue
         selected_source_ids.append(source_id)
-        if len(selected_source_ids) >= MAX_SELECTED_SOURCES:
-            fallback_reason = fallback_reason or "selected_source_limit_reached"
-            break
 
     if invalid_source_id_count > 0:
         fallback_reason = fallback_reason or "invalid_tool_source_ids_removed"
@@ -370,12 +364,13 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
         record_types = arguments.get("record_types") or []
         if not isinstance(record_types, list):
             record_types = []
-        limit_raw = arguments.get("limit", MAX_TOOL_RESULTS)
+        limit_raw = arguments.get("limit")
         try:
-            limit = int(limit_raw)
+            limit = int(limit_raw) if limit_raw is not None else None
         except (TypeError, ValueError):
-            limit = MAX_TOOL_RESULTS
-        limit = max(1, min(limit, MAX_TOOL_RESULTS))
+            limit = None
+        if limit is not None:
+            limit = max(1, limit)
         payload = {"matches": search_sources(request, query, _expand_record_types(record_types), limit)}
         return ToolCallResult(tool="search_sources", success=True, payload=payload)
 
@@ -383,25 +378,25 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
         ids = arguments.get("ids") or []
         if not isinstance(ids, list):
             ids = []
-        payload = {"sources": get_sources(request, ids[:MAX_SELECTED_SOURCES])}
+        payload = {"sources": get_sources(request, ids)}
         return ToolCallResult(tool="get_sources", success=True, payload=payload)
 
     if name == "get_document_facts":
         fields = arguments.get("fields") or []
         if not isinstance(fields, list):
             fields = []
-        limit_raw = arguments.get("limit", MAX_TOOL_RESULTS)
+        limit_raw = arguments.get("limit")
         try:
-            limit = int(limit_raw)
+            limit = int(limit_raw) if limit_raw is not None else None
         except (TypeError, ValueError):
-            limit = MAX_TOOL_RESULTS
+            limit = None
         payload = {
             "facts": get_document_facts(
                 request,
                 document_type=str(arguments.get("document_type", "") or ""),
                 fields=[str(field) for field in fields],
                 field_group=str(arguments.get("field_group", "") or ""),
-                limit=max(1, min(limit, MAX_TOOL_RESULTS)),
+                limit=max(1, limit) if limit is not None else None,
             )
         }
         return ToolCallResult(tool="get_document_facts", success=True, payload=payload)
@@ -423,16 +418,16 @@ def execute_tool(request: AgentForgeRequest, name: str, arguments_json: str) -> 
         record_types = arguments.get("record_types") or []
         if not isinstance(record_types, list):
             record_types = []
-        limit_raw = arguments.get("limit_per_type", 3)
+        limit_raw = arguments.get("limit_per_type")
         try:
-            limit_per_type = int(limit_raw)
+            limit_per_type = int(limit_raw) if limit_raw is not None else None
         except (TypeError, ValueError):
-            limit_per_type = 3
+            limit_per_type = None
         payload = {
             "summary": summarize_by_type(
                 request,
                 [str(record_type) for record_type in record_types],
-                max(1, min(limit_per_type, 6)),
+                max(1, limit_per_type) if limit_per_type is not None else None,
             )
         }
         return ToolCallResult(tool="summarize_by_type", success=True, payload=payload)
@@ -451,7 +446,7 @@ def search_sources(
     request: AgentForgeRequest,
     query: str,
     record_types: list[str],
-    limit: int,
+    limit: int | None,
 ) -> list[dict]:
     query_terms = _keywords(query)
     hinted_types = _hinted_record_types(query_terms)
@@ -486,7 +481,8 @@ def search_sources(
 
     if scored:
         scored.sort(key=lambda item: (item[0], item[1].recorded_at, item[1].id), reverse=True)
-        return [_source_payload(source) for _score, source in scored[:limit]]
+        selected = scored if limit is None else scored[:limit]
+        return [_source_payload(source) for _score, source in selected]
 
     # Keep tool-use non-deterministic while avoiding empty retrieval on broad questions.
     # If lexical matches are sparse, return a bounded fallback slice from likely record types.
@@ -510,7 +506,7 @@ def get_document_facts(
     document_type: str = "",
     fields: list[str] | None = None,
     field_group: str = "",
-    limit: int = MAX_TOOL_RESULTS,
+    limit: int | None = None,
 ) -> list[dict]:
     requested_fields = {field.strip().lower() for field in (fields or []) if field}
     group = field_group.strip().lower()
@@ -532,10 +528,11 @@ def get_document_facts(
         matches.append(source)
 
     matches.sort(key=lambda source: (_document_fact_group_order(source, requested_fields), source.recorded_at, source.id))
-    return [_document_fact_payload(source) for source in matches[:limit]]
+    selected = matches if limit is None else matches[:limit]
+    return [_document_fact_payload(source) for source in selected]
 
 
-def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit_per_type: int = 3) -> list[dict]:
+def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit_per_type: int | None = None) -> list[dict]:
     allowed_types = {record_type.strip().lower() for record_type in record_types if record_type}
     grouped: dict[str, list[EvidenceSource]] = {}
     for source in request.evidence_bundle.sources:
@@ -547,6 +544,7 @@ def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit
     summaries = []
     for record_type in sorted(grouped):
         sources = sorted(grouped[record_type], key=lambda source: (source.recorded_at, source.id), reverse=True)
+        representative_sources = sources if limit_per_type is None else sources[:limit_per_type]
         summaries.append(
             {
                 "record_type": record_type,
@@ -558,7 +556,7 @@ def summarize_by_type(request: AgentForgeRequest, record_types: list[str], limit
                         "field_path": source.field_path,
                         "value": source.value[:180],
                     }
-                    for source in sources[:limit_per_type]
+                    for source in representative_sources
                 ],
             }
         )
@@ -599,8 +597,8 @@ def check_allergy_conflicts(request: AgentForgeRequest) -> dict:
         "allergy_source_ids": [source.id for source in allergies],
         "medication_source_ids": [source.id for source in medications],
         "potential_conflict_terms": sorted(set(conflict_terms)),
-        "review_pairs": review_pairs[:6],
-        "allergy_management_meds": allergy_management_meds[:6],
+        "review_pairs": review_pairs,
+        "allergy_management_meds": allergy_management_meds,
     }
 
 
@@ -739,7 +737,7 @@ def _is_lab_document_fact(source: EvidenceSource, metadata_text: str = "") -> bo
     return any(term in haystack for term in LAB_DOCUMENT_FACT_HINTS)
 
 
-def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit: int) -> list[EvidenceSource]:
+def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit: int | None) -> list[EvidenceSource]:
     preferred_types = FALLBACK_RECORD_TYPE_ORDER
     if hinted_types:
         preferred_types = sorted(
@@ -763,7 +761,7 @@ def _fallback_sources(request: AgentForgeRequest, hinted_types: set[str], limit:
                 continue
             selected.append(source)
             seen.add(source.id)
-            if len(selected) >= limit:
+            if limit is not None and len(selected) >= limit:
                 return selected
     return selected
 

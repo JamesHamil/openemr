@@ -183,6 +183,220 @@ function generatePageElement($start, $pagesize, $billing, $issue, $text): void
     echo "<a href='" . $url . "' onclick='top.restoreSession()'>" . $text . "</a>";
 }
 
+function agentforgeVisitHistoryAssetUrl(string $asset): string
+{
+    return OEGlobalsBag::getInstance()->getWebRoot()
+        . "/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets/"
+        . rawurlencode($asset)
+        . "?v=" . rawurlencode((string) OEGlobalsBag::getInstance()->get('v_js_includes'));
+}
+
+function agentforgeEncounterProviderName(array $encounter): string
+{
+    if (!empty($encounter['lname']) || !empty($encounter['fname'])) {
+        $provider = (string) ($encounter['lname'] ?? '');
+        if (!empty($encounter['fname']) || !empty($encounter['mname'])) {
+            $provider .= ', ' . (string) ($encounter['fname'] ?? '') . ' ' . (string) ($encounter['mname'] ?? '');
+        }
+        return trim($provider);
+    }
+    return xl('Unknown');
+}
+
+function agentforgeEncounterBillingSummary(int $pid, int $encounter): string
+{
+    $billingRows = BillingUtilities::getBillingByEncounter($pid, $encounter, "code_type, code, modifier, code_text, fee");
+    if (!$billingRows) {
+        return '';
+    }
+
+    $codes = [];
+    foreach ($billingRows as $billingRow) {
+        $code = (string) ($billingRow['code_type'] ?? '') . ' - ' . (string) ($billingRow['code'] ?? '');
+        if (!empty($billingRow['modifier'])) {
+            $code .= ':' . (string) $billingRow['modifier'];
+        }
+        $codes[] = trim($code);
+    }
+
+    return implode(', ', array_filter($codes));
+}
+
+function agentforgeCollectVisitHistoryDocuments(int $pid): array
+{
+    $visits = [];
+    $query = "SELECT d.id, d.name as document_name, d.docdate, d.encounter_id, c.name " .
+        "FROM documents AS d, categories_to_documents AS cd, categories AS c WHERE " .
+        "d.foreign_id = ? AND cd.document_id = d.id AND c.id = cd.category_id " .
+        "ORDER BY d.docdate DESC, d.id DESC";
+    $resultSet = sqlStatement($query, [$pid]);
+
+    while ($document = sqlFetchArray($resultSet)) {
+        $date = date('Y-m-d', strtotime((string) $document['docdate']));
+        $category = xl_document_category($document['name']);
+        $documentTitle = trim((string) $category) !== '' ? (string) $category : xl('Document');
+        $visits[] = [
+            'id' => 'document-' . (string) $document['id'],
+            'title' => $documentTitle,
+            'detail' => (string) $document['document_name'] . '-' . (string) $document['id'] . ' (' . $category . ')',
+            'meta' => $date,
+            'status' => xl('Document'),
+            'startDate' => $date,
+            'provider' => xl('Records'),
+            'dateSort' => strtotime($date) ?: 0,
+        ];
+    }
+
+    return $visits;
+}
+
+function agentforgeCollectVisitHistoryEncounters($session, int $pid, bool $authNotesA, bool $authNotes, bool $authRelaxed, bool $authCodingA, bool $authCoding): array
+{
+    global $ISSUE_TYPES;
+
+    $visits = [];
+    $from = "FROM form_encounter AS fe " .
+        "JOIN forms AS f ON f.pid = fe.pid AND f.encounter = fe.encounter AND " .
+        "f.formdir = 'newpatient' AND f.deleted = 0 " .
+        "LEFT JOIN users AS u ON u.id = fe.provider_id WHERE fe.pid = ? ";
+    $resultSet = sqlStatement(
+        "SELECT fe.*, f.user, u.fname, u.mname, u.lname " . $from . "ORDER BY fe.date DESC, fe.id DESC",
+        [$pid]
+    );
+
+    while ($encounter = sqlFetchArray($resultSet)) {
+        $date = date('Y-m-d', strtotime((string) $encounter['date']));
+        $authSensitivity = true;
+        $postCalendarCategoryACO = AclMain::fetchPostCalendarCategoryACO($encounter['pc_catid']);
+        if ($postCalendarCategoryACO) {
+            $postCalendarCategoryACO = explode('|', (string) $postCalendarCategoryACO);
+            $authPostCalendarCategory = AclMain::aclCheckCore($postCalendarCategoryACO[0], $postCalendarCategoryACO[1]);
+        } else {
+            $authPostCalendarCategory = true;
+        }
+
+        if ($encounter['sensitivity']) {
+            $authSensitivity = AclMain::aclCheckCore('sensitivities', $encounter['sensitivity']);
+        }
+
+        $reason = trim((string) ($encounter['reason'] ?? ''));
+        $title = $reason !== '' ? $reason : xl('Encounter');
+        $forms = [];
+
+        if (
+            $authSensitivity && $authPostCalendarCategory &&
+            ($authNotesA || ($authNotes && $encounter['user'] == $session->get('authUser')))
+        ) {
+            $encounterForms = getFormByEncounter($pid, $encounter['encounter'], "formdir, user, form_name, form_id, deleted");
+            foreach ($encounterForms as $encounterForm) {
+                $formdir = (string) $encounterForm['formdir'];
+                if ($formdir === 'newpatient' || $encounterForm['deleted'] == 1) {
+                    continue;
+                }
+                if (
+                    !$authNotesA &&
+                    !($authNotes && $encounterForm['user'] == $session->get('authUser')) &&
+                    !($authRelaxed && ($formdir === 'sports_fitness' || $formdir === 'podiatry'))
+                ) {
+                    continue;
+                }
+                if (hasFormPermission($formdir)) {
+                    $forms[] = xl_form_title($encounterForm['form_name']);
+                }
+            }
+        } elseif (!$authSensitivity || !$authPostCalendarCategory) {
+            $title = xl('No access');
+        }
+
+        $billingSummary = '';
+        $codingAuthorized = $authCodingA || ($authCoding && $encounter['user'] == $session->get('authUser'));
+        if ($codingAuthorized && $authSensitivity && $authPostCalendarCategory) {
+            $billingSummary = agentforgeEncounterBillingSummary($pid, (int) $encounter['encounter']);
+        }
+
+        $visits[] = [
+            'id' => 'encounter-' . (string) $encounter['encounter'],
+            'title' => $title,
+            'detail' => $forms ? implode(', ', $forms) : xl('Reason not recorded'),
+            'meta' => $date,
+            'status' => $billingSummary ?: xl('Encounter'),
+            'startDate' => $date,
+            'provider' => agentforgeEncounterProviderName($encounter),
+            'dateSort' => strtotime($date) ?: 0,
+        ];
+    }
+
+    return $visits;
+}
+
+function agentforgeCollectVisitHistoryPayload($session, int $pid, bool $authNotesA, bool $authNotes, bool $authRelaxed, bool $authCodingA, bool $authCoding): array
+{
+    $dob = (string) (getPatientData($pid, "DOB")['DOB'] ?? '');
+    $externalId = (string) (getPatientData($pid, "pubpid")['pubpid'] ?? $pid);
+    $visits = array_merge(
+        agentforgeCollectVisitHistoryDocuments($pid),
+        agentforgeCollectVisitHistoryEncounters($session, $pid, $authNotesA, $authNotes, $authRelaxed, $authCodingA, $authCoding)
+    );
+    usort($visits, static fn(array $left, array $right): int => (int) $right['dateSort'] <=> (int) $left['dateSort']);
+
+    return [
+        'patient' => [
+            'name' => getPatientNameFirstLast($pid),
+            'dateOfBirth' => $dob !== '' ? oeFormatShortDate($dob) : xl('Unknown DOB'),
+            'mrn' => $externalId,
+        ],
+        'encounters' => [
+            'status' => 'loaded',
+            'data' => $visits,
+        ],
+        'billingUrl' => 'encounters.php?billing=1&issue=0',
+    ];
+}
+
+function agentforgeRenderModernVisitHistory(array $payload): void
+{
+    $encodedPayload = json_encode(
+        $payload,
+        JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_AMP | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE
+    );
+    ?>
+<!DOCTYPE html>
+<html>
+<head>
+<title><?php echo xlt('Visit History'); ?></title>
+<?php Header::setupHeader(['no_textformat']); ?>
+<link rel="stylesheet" href="<?php echo attr(agentforgeVisitHistoryAssetUrl('patient-dashboard.css')); ?>" />
+</head>
+<body>
+<div id="agentforge-visit-history-root"></div>
+<script>
+window.__AGENTFORGE_VISIT_HISTORY__ = <?php echo $encodedPayload ?: '{}'; ?>;
+</script>
+<script type="module" src="<?php echo attr(agentforgeVisitHistoryAssetUrl('patient-dashboard.js')); ?>"></script>
+</body>
+</html>
+    <?php
+}
+
+if (
+    !$billing_view &&
+    !$issue &&
+    $attendant_type == 'pid' &&
+    empty($_GET['legacy']) &&
+    ($auth_notes_a || $auth_notes || $auth_coding_a || $auth_coding || $auth_med || $auth_relaxed)
+) {
+    agentforgeRenderModernVisitHistory(agentforgeCollectVisitHistoryPayload(
+        $session,
+        (int) $pid,
+        (bool) $auth_notes_a,
+        (bool) $auth_notes,
+        (bool) $auth_relaxed,
+        (bool) $auth_coding_a,
+        (bool) $auth_coding
+    ));
+    exit;
+}
+
 ?>
 <!DOCTYPE html>
 <html>

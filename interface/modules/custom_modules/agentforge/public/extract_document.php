@@ -11,12 +11,14 @@
 require_once(__DIR__ . "/../../../../globals.php");
 require_once(__DIR__ . "/../../../../../library/classes/Document.class.php");
 require_once(__DIR__ . "/../src/AgentForgeOpenEmrCompat.php");
+require_once(__DIR__ . "/../src/AgentForgeChartWritebackService.php");
 require_once(__DIR__ . "/../src/AgentForgeDocumentStore.php");
 require_once(__DIR__ . "/../src/AgentForgeSidecarClient.php");
 
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Logging\EventAuditLogger;
+use OpenEMR\Modules\AgentForge\AgentForgeChartWritebackService;
 use OpenEMR\Modules\AgentForge\AgentForgeDocumentStore;
 use OpenEMR\Modules\AgentForge\AgentForgeSidecarClient;
 
@@ -174,6 +176,25 @@ try {
                 'file_hash' => $hash,
             ],
             'extraction' => $extraction,
+        ];
+    }
+    $writeback = (new AgentForgeChartWritebackService())->writeBack(
+        $requestPid,
+        $agentforgeDocumentId,
+        $openEmrDocumentId,
+        $payload
+    );
+    $payload['chart_writeback'] = $writeback;
+    if (!empty($writeback['applied'])) {
+        if (!isset($payload['extraction']['warnings']) || !is_array($payload['extraction']['warnings'])) {
+            $payload['extraction']['warnings'] = [];
+        }
+        $changedFields = is_array($writeback['changed_fields'] ?? null)
+            ? array_values(array_unique($writeback['changed_fields']))
+            : [];
+        $payload['extraction']['warnings'][] = [
+            'code' => 'chart_writeback_applied',
+            'message' => 'AgentForge updated chart data from the uploaded document: ' . implode(', ', $changedFields),
         ];
     }
     $payload['recent_documents'] = $store->recentDocuments($requestPid);

@@ -139,9 +139,6 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
                     <button type="button" id="agentforgeBrief" class="btn btn-primary">
                         <i class="fa fa-notes-medical"></i> <?php echo xlt('Generate Brief'); ?>
                     </button>
-                    <button type="button" id="agentforgeAsk" class="btn btn-secondary">
-                        <i class="fa fa-comment-medical"></i> <?php echo xlt('Ask Follow-Up'); ?>
-                    </button>
                 </div>
 
                 <div id="agentforgeAnswer" class="agentforge-response"><?php echo xlt('The verified response will appear here.'); ?></div>
@@ -166,8 +163,7 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
 <script>
     (function () {
         const briefButton = document.getElementById('agentforgeBrief');
-        const askButton = document.getElementById('agentforgeAsk');
-        if (!briefButton || !askButton) {
+        if (!briefButton) {
             return;
         }
 
@@ -404,7 +400,6 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             status.textContent = currentPhase + ' 0s';
             renderStreamProgress(currentPhase, elapsed);
             briefButton.disabled = true;
-            askButton.disabled = true;
             const timer = window.setInterval(function () {
                 elapsed += 1;
                 status.textContent = currentPhase + ' ' + elapsed + 's';
@@ -491,7 +486,6 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             }).finally(function () {
                 window.clearInterval(timer);
                 briefButton.disabled = false;
-                askButton.disabled = false;
             });
         }
 
@@ -501,10 +495,6 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
         }
 
         briefButton.addEventListener('click', function () {
-            const message = messageInputValue() || 'Give me a chart brief for rounds.';
-            send(message);
-        });
-        askButton.addEventListener('click', function () {
             const message = messageInputValue() || 'Give me a chart brief for rounds.';
             send(message);
         });
