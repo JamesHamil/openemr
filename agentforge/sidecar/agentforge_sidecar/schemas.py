@@ -222,6 +222,9 @@ class TraceRecord(StrictModel):
     repair_count: int | None = None
     status_reason: str | None = None
     source_selection_mode: str | None = None
+    latency_strategy: str | None = None
+    verify_mode: str | None = None
+    cache_hit: bool | None = None
     schema_evidence_expansion: dict = Field(default_factory=dict)
     stale_blocked_claim_count: int | None = None
     valid_blocked_claim_count: int | None = None

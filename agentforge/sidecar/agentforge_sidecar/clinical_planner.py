@@ -203,11 +203,14 @@ def _is_lab_question(normalized: str) -> bool:
 def missing_required_adapters(request: AgentForgeRequest, plan: EvidencePlan | None = None) -> list[str]:
     plan = plan or plan_evidence(request)
     statuses = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
-    return [
-        adapter
-        for adapter in plan.required_adapters
-        if statuses.get(adapter) not in {None, "success", "partial"}
-    ]
+    missing: list[str] = []
+    for adapter in plan.required_adapters:
+        if statuses.get(adapter) in {None, "success", "partial"}:
+            continue
+        if adapter == "labs" and _has_lab_document_evidence(request):
+            continue
+        missing.append(adapter)
+    return missing
 
 
 def _family_policy(
@@ -436,6 +439,7 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
         add(_by_type(sources, "note"), 8)
     elif family == "labs":
         add(_by_type(sources, "lab"), 8)
+        add(_lab_document_fact_sources(sources), 8)
     elif family == "document_facts":
         add(_document_fact_sources_for_message(request), 10)
         if _asks_patient_identity(request.message):
@@ -466,6 +470,52 @@ def _problems_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) ->
 
 def _labs_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> list[EvidenceSource]:
     return [source for source in _by_type(sources, "lab") if _matches(source, terms)]
+
+
+LAB_DOCUMENT_FACT_TERMS = (
+    "lab",
+    "labs",
+    "cbc",
+    "blood count",
+    "differential",
+    "morphology",
+    "smear",
+    "glucose",
+    "creatinine",
+    "a1c",
+    "hemoglobin",
+    "hematocrit",
+    "platelet",
+    "leukocyte",
+    "lymphocyte",
+    "monocyte",
+    "neutrophil",
+    "blast",
+    "promyelocyte",
+    "metamyelocyte",
+)
+
+
+def _lab_document_fact_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    return [source for source in _by_type(sources, "document_fact") if _is_lab_document_fact(source)]
+
+
+def _is_lab_document_fact(source: EvidenceSource) -> bool:
+    if source.record_type != "document_fact":
+        return False
+    if _document_type(source) == "lab_pdf":
+        return True
+    if "lab_result" in source.field_path.lower():
+        return True
+    return _matches(source, LAB_DOCUMENT_FACT_TERMS)
+
+
+def _has_lab_document_evidence(request: AgentForgeRequest) -> bool:
+    statuses = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
+    documents_available = statuses.get("agentforge_documents") in {None, "success", "partial"}
+    return documents_available and any(
+        _is_lab_document_fact(source) for source in request.evidence_bundle.sources
+    )
 
 
 def _medications_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> list[EvidenceSource]:

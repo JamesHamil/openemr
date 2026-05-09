@@ -13,6 +13,7 @@ from agentforge_sidecar.openai_provider import (
     _limit_response,
     _model_verify_and_repair,
     _plan_needs_lab_augmentation,
+    _RESPONSE_CACHE,
     _schema_lab_source_ids_for_plan,
     openai_response,
 )
@@ -201,14 +202,65 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(diagnostics.source_selection_mode, "planner")
         self.assertEqual(diagnostics.tool_call_count, 0)
         self.assertEqual(diagnostics.planning_latency_ms, 0)
-        self.assertEqual(diagnostics.model_call_count, 2)
-        self.assertGreaterEqual(diagnostics.verify_latency_ms, 0)
+        self.assertEqual(diagnostics.model_call_count, 1)
+        self.assertEqual(diagnostics.verifier_result, "passed")
+        self.assertEqual(diagnostics.verify_mode, "deterministic")
         self.assertIn("provider", response.debug_trace)
         self.assertEqual(response.debug_trace["provider"]["source_selection_mode"], "planner")
-        self.assertEqual(diagnostics.input_tokens, 180)
-        self.assertEqual(diagnostics.output_tokens, 25)
+        self.assertEqual(response.debug_trace["provider"]["latency_strategy"], "deterministic_selection+compose+deterministic_verify")
+        self.assertEqual(diagnostics.input_tokens, 100)
+        self.assertEqual(diagnostics.output_tokens, 20)
 
-    def test_openai_response_uses_model_tool_phase_for_low_confidence_plan(self):
+    def test_openai_response_uses_deterministic_selection_for_low_confidence_plan(self):
+        request = _request().model_copy(update={"message": "What is the zebulon index?"})
+        composed = ModelAgentForgeResponse(
+            answer="Retrieved chart evidence shows allergy to eggs. [allergy-1]",
+            claims=[
+                Claim(
+                    id="claim-1",
+                    text="Retrieved chart evidence shows Allergy to eggs.",
+                    claim_type="allergy",
+                    source_ids=["allergy-1"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ModelResponseSource(
+                    id="allergy-1",
+                    record_type="allergy",
+                    display="Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Allergy to eggs",
+                )
+            ],
+            verification_status="verified",
+            trace_id="trace-test",
+        )
+        client = _FakeClient(
+            [
+                composed,
+                ModelVerificationResult(
+                    result="passed",
+                    status_recommendation="verified",
+                    citation_coverage=1.0,
+                ),
+            ]
+        )
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.source_selection_mode, "deterministic")
+        self.assertEqual(diagnostics.tool_call_count, 0)
+        self.assertEqual(diagnostics.planning_latency_ms, 0)
+        self.assertEqual(diagnostics.model_call_count, 1)
+
+    def test_openai_response_uses_model_tool_phase_when_forced_by_settings(self):
         request = _request().model_copy(update={"message": "What is the zebulon index?"})
         composed = ModelAgentForgeResponse(
             answer="Retrieved chart evidence shows allergy to eggs. [allergy-1]",
@@ -252,11 +304,16 @@ class OpenAIProviderTest(unittest.TestCase):
                     ToolPhaseResult(selected_source_ids=["allergy-1"], focus="Model selected source."),
                     ToolPhaseDiagnostics(tool_call_count=1, planning_latency_ms=123),
                 )
-                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+                response, diagnostics = openai_response(
+                    request,
+                    "trace-test",
+                    Settings(mode="real", source_selection_mode="model", verify_mode="model"),
+                )
 
         run_tool_phase.assert_called_once()
         self.assertEqual(response.verification_status, "verified")
         self.assertEqual(diagnostics.source_selection_mode, "model_tool_phase")
+        self.assertEqual(diagnostics.verify_mode, "model")
         self.assertEqual(diagnostics.tool_call_count, 1)
         self.assertEqual(diagnostics.planning_latency_ms, 123)
 
@@ -347,7 +404,7 @@ class OpenAIProviderTest(unittest.TestCase):
                 response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
 
         run_tool_phase.assert_called_once()
-        self.assertEqual(len(client.responses.parse_calls), 2)
+        self.assertEqual(len(client.responses.parse_calls), 1)
         compose_payload = _parse_compose_payload(client.responses.parse_calls[0])
         self.assertEqual(response.verification_status, "verified")
         self.assertIn("schema_evidence_expansion", diagnostics.source_selection_mode)
@@ -357,7 +414,7 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertIn("document-fact-51", compose_payload["selected_source_ids"])
         self.assertIn("schema_evidence_expansion", response.debug_trace)
 
-    def test_openai_response_expands_all_intake_phone_numbers_then_uses_model_compose(self):
+    def test_openai_response_expands_all_intake_phone_numbers_then_answers_directly(self):
         request = _request().model_copy(update={"message": "give me all the phone numbers in the intake form"})
         bundle = request.evidence_bundle.model_copy(
             update={
@@ -411,70 +468,7 @@ class OpenAIProviderTest(unittest.TestCase):
             }
         )
         request = request.model_copy(update={"evidence_bundle": bundle})
-        composed = ModelAgentForgeResponse(
-            answer="The intake form lists patient, emergency contact, and pharmacy phone numbers. [document-fact-101]",
-            claims=[
-                Claim(
-                    id="claim-1",
-                    text="Patient phone is (217) 555-0198.",
-                    claim_type="document_fact",
-                    source_ids=["document-fact-101"],
-                    support_status="supported",
-                ),
-                Claim(
-                    id="claim-2",
-                    text="Emergency contact phone is (217) 555-0144.",
-                    claim_type="document_fact",
-                    source_ids=["document-fact-102"],
-                    support_status="supported",
-                ),
-                Claim(
-                    id="claim-3",
-                    text="Pharmacy phone is (217) 555-0160.",
-                    claim_type="document_fact",
-                    source_ids=["document-fact-103"],
-                    support_status="supported",
-                ),
-            ],
-            sources=[
-                ModelResponseSource(
-                    id="document-fact-101",
-                    record_type="document_fact",
-                    display="Document Fact source",
-                    recorded_at="2026-05-05T01:25:58Z",
-                    field_path="agentforge_extracted_facts.demographic",
-                    extracted_value="Patient Phone; (217) 555-0198",
-                ),
-                ModelResponseSource(
-                    id="document-fact-102",
-                    record_type="document_fact",
-                    display="Document Fact source",
-                    recorded_at="2026-05-05T01:25:58Z",
-                    field_path="agentforge_extracted_facts.demographic",
-                    extracted_value="Emergency Contact Phone; (217) 555-0144",
-                ),
-                ModelResponseSource(
-                    id="document-fact-103",
-                    record_type="document_fact",
-                    display="Document Fact source",
-                    recorded_at="2026-05-05T01:25:58Z",
-                    field_path="agentforge_extracted_facts.pharmacy",
-                    extracted_value="Pharmacy Phone; (217) 555-0160",
-                ),
-            ],
-            verification_status="verified",
-            trace_id="trace-test",
-        )
-        client = _FakeClient(
-            [
-                composed,
-                ModelVerificationResult(
-                    result="passed",
-                    status_recommendation="verified",
-                    citation_coverage=1.0,
-                ),
-            ]
-        )
+        client = _FakeClient([])
         openai_module = SimpleNamespace(OpenAI=lambda: client)
 
         with patch.dict("sys.modules", {"openai": openai_module}):
@@ -482,27 +476,84 @@ class OpenAIProviderTest(unittest.TestCase):
                 response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
 
         run_tool_phase.assert_not_called()
-        self.assertEqual(len(client.responses.parse_calls), 2)
-        compose_payload = _parse_compose_payload(client.responses.parse_calls[0])
+        self.assertEqual(len(client.responses.parse_calls), 0)
         self.assertEqual(response.verification_status, "verified")
         self.assertIn("schema_evidence_expansion", diagnostics.source_selection_mode)
         self.assertTrue(diagnostics.source_selection_mode.startswith("planner"))
         self.assertEqual(diagnostics.schema_evidence_expansion["groups"], ["phone_numbers"])
         self.assertEqual(diagnostics.planning_latency_ms, 0)
-        self.assertEqual(diagnostics.model_call_count, 2)
+        self.assertEqual(diagnostics.model_call_count, 0)
         self.assertEqual(diagnostics.selected_source_count, 3)
         self.assertEqual(len(response.claims), 3)
-        self.assertEqual(
-            compose_payload["selected_source_ids"],
-            ["document-fact-101", "document-fact-102", "document-fact-103"],
-        )
         self.assertEqual(
             [source.id for source in response.sources],
             ["document-fact-101", "document-fact-102", "document-fact-103"],
         )
         self.assertEqual(response.sources[-1].extracted_value, "Pharmacy phone; (217) 555-0160")
-        self.assertEqual(response.debug_trace["provider"]["model_call_count"], 2)
-        self.assertEqual(response.debug_trace["provider"]["compose_latency_ms"], diagnostics.compose_latency_ms)
+        self.assertEqual(response.debug_trace["provider"]["model_call_count"], 0)
+        self.assertEqual(
+            response.debug_trace["provider"]["latency_strategy"],
+            "deterministic_selection+deterministic_answer+deterministic_verify",
+        )
+
+    def test_openai_response_answers_emergency_contact_lookup_directly(self):
+        request = _request().model_copy(
+            update={"message": "what is this patient's emergency contact and their phone number?"}
+        )
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="document-fact-332",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.PatientPhone",
+                        value="Patient Phone; (217) 555-0198",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-334",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.EmergencyContactName",
+                        value="Emergency Contact Name; Alex Rivera",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-335",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.EmergencyContactPhone",
+                        value="Emergency Contact Phone; (217) 555-0144",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                    EvidenceSource(
+                        id="document-fact-349",
+                        record_type="document_fact",
+                        recorded_at="2026-05-05T01:25:58Z",
+                        field_path="agentforge_extracted_facts.PharmacyPhone",
+                        value="Pharmacy Phone; (217) 555-0160",
+                        metadata={"document_type": "intake_form"},
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(diagnostics.schema_evidence_expansion["groups"], ["intake_contact"])
+        self.assertEqual(diagnostics.model_call_count, 0)
+        self.assertEqual([source.id for source in response.sources], ["document-fact-334", "document-fact-335"])
+        self.assertEqual(response.answer, "Emergency contact is Alex Rivera; phone (217) 555-0144.")
+        self.assertFalse(response.warnings)
 
     def test_openai_response_intake_summary_skips_tool_phase_and_keeps_compose_payload_narrow(self):
         request = _request().model_copy(update={"message": "I need to know about this patient's intake form"})
@@ -589,16 +640,14 @@ class OpenAIProviderTest(unittest.TestCase):
 
         run_tool_phase.assert_not_called()
         self.assertEqual(diagnostics.source_selection_mode, "planner")
-        self.assertEqual(diagnostics.model_call_count, 2)
+        self.assertEqual(diagnostics.model_call_count, 1)
         compose_payload = _parse_compose_payload(client.responses.parse_calls[0])
-        verify_payload = _parse_verify_payload(client.responses.parse_calls[1])
         self.assertEqual(compose_payload["adapter_status"][0]["adapter"], "agentforge_documents")
         self.assertEqual(len(compose_payload["adapter_status"]), 1)
         self.assertIn("document-fact-273", compose_payload["selected_source_ids"])
         self.assertIn("document-fact-271", compose_payload["selected_source_ids"])
         self.assertNotIn("patient-name-1", compose_payload["selected_source_ids"])
         self.assertNotIn("guideline-red-flags-1", compose_payload["selected_source_ids"])
-        self.assertEqual(len(verify_payload["adapter_status"]), 1)
         self.assertEqual(response.debug_trace["provider"]["answer_family"], "document_facts")
 
     def test_schema_completion_guard_marks_omitted_phone_facts_partial(self):
@@ -682,11 +731,12 @@ class OpenAIProviderTest(unittest.TestCase):
 
         with patch.dict("sys.modules", {"openai": openai_module}):
             with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
-                run_tool_phase.return_value = (
-                    ToolPhaseResult(selected_source_ids=["document-fact-103"], focus="Model selected one phone fact."),
-                    ToolPhaseDiagnostics(tool_call_count=1, planning_latency_ms=123),
-                )
-                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+                with patch("agentforge_sidecar.openai_provider._deterministic_document_fact_response", return_value=None):
+                    run_tool_phase.return_value = (
+                        ToolPhaseResult(selected_source_ids=["document-fact-103"], focus="Model selected one phone fact."),
+                        ToolPhaseDiagnostics(tool_call_count=1, planning_latency_ms=123),
+                    )
+                    response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
 
         self.assertEqual(response.verification_status, "partial")
         self.assertEqual(response.warnings[-1].code, "schema_evidence_omitted")
@@ -714,7 +764,7 @@ class OpenAIProviderTest(unittest.TestCase):
         response, metadata = _model_verify_and_repair(
             client=client,
             model="gpt-test",
-            settings=Settings(mode="real"),
+            settings=Settings(mode="real", verify_mode="model"),
             request=request,
             response=_response("Eggs are documented; verify severity."),
             selected_sources=request.evidence_bundle.sources,
@@ -727,6 +777,47 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(metadata.status_reason, "model_verifier_repaired")
         self.assertEqual(metadata.input_tokens, 55)
         self.assertEqual(metadata.output_tokens, 11)
+
+    def test_response_cache_reuses_fast_path_without_model_call(self):
+        _RESPONSE_CACHE.clear()
+        request = _request()
+        composed = ModelAgentForgeResponse(
+            answer="Documented allergies include eggs. [allergy-1]",
+            claims=[
+                Claim(
+                    id="claim-1",
+                    text="Documented allergies include Allergy to eggs.",
+                    claim_type="allergy",
+                    source_ids=["allergy-1"],
+                    support_status="supported",
+                )
+            ],
+            sources=[
+                ModelResponseSource(
+                    id="allergy-1",
+                    record_type="allergy",
+                    display="Allergy source",
+                    recorded_at="2026-04-30T08:00:00Z",
+                    field_path="lists.title",
+                    extracted_value="Allergy to eggs",
+                )
+            ],
+            verification_status="verified",
+            trace_id="trace-one",
+        )
+        client = _FakeClient([(composed, 100, 20)])
+        settings = Settings(mode="real", response_cache_enabled=True)
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            first_response, first_diagnostics = openai_response(request, "trace-one", settings)
+        second_response, second_diagnostics = openai_response(request, "trace-two", settings)
+
+        self.assertFalse(first_diagnostics.cache_hit)
+        self.assertTrue(second_diagnostics.cache_hit)
+        self.assertEqual(second_diagnostics.model_call_count, 0)
+        self.assertEqual(second_response.trace_id, "trace-two")
+        self.assertEqual(second_response.answer, first_response.answer)
 
     def test_missing_data_empty_selection_fallback_names_unavailable_adapters(self):
         request = _request().model_copy(update={"message": "What is missing that I need before making clinical decisions?"})

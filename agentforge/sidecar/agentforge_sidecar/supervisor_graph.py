@@ -266,7 +266,7 @@ def _chat_supervisor(state: ChatGraphState) -> dict:
 def _after_supervisor(state: ChatGraphState) -> str:
     if "response" in state:
         return "end"
-    if state.get("supervisor_route") == "answer_document_facts":
+    if state.get("supervisor_route") in {"answer_document_facts", "answer_direct_evidence"}:
         return "answer"
     return "retrieve"
 
@@ -276,7 +276,11 @@ def _initial_chat_route(request: AgentForgeRequest) -> str:
         plan = plan_evidence(request)
     except Exception:
         return "retrieve_then_answer"
-    return "answer_document_facts" if plan.answer_family == "document_facts" else "retrieve_then_answer"
+    if plan.answer_family == "document_facts":
+        return "answer_document_facts"
+    if plan.answer_family == "labs":
+        return "answer_direct_evidence"
+    return "retrieve_then_answer"
 
 
 def _evidence_retriever(state: ChatGraphState) -> dict:

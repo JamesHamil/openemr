@@ -27,6 +27,19 @@ AGENTFORGE_SIGNING_SECRET=<shared secret>
 
 `AGENTFORGE_SIGNING_SECRET` is required for `/v1/chat`; the sidecar rejects signed chat requests when it is not configured.
 
+## Latency Controls
+
+The real-mode answer path defaults to fast local evidence selection plus model composition. It only uses model tool-planning or model verification when the automatic policy needs escalation.
+
+```text
+AGENTFORGE_SOURCE_SELECTION_MODE=auto        # auto | deterministic | model
+AGENTFORGE_VERIFY_MODE=auto                  # auto | deterministic | model
+AGENTFORGE_COMPOSE_MODEL=gpt-5-nano          # optional, defaults to AGENTFORGE_OPENAI_MODEL
+AGENTFORGE_VERIFY_MODEL=gpt-5-nano           # optional, defaults to AGENTFORGE_OPENAI_MODEL
+AGENTFORGE_RESPONSE_CACHE_ENABLED=false      # optional in-memory cache for repeated bundle/question pairs
+AGENTFORGE_RESPONSE_CACHE_TTL_SECONDS=120
+```
+
 ## Langfuse Observability
 
 Langfuse tracing is optional and disabled by default. Metadata-only tracing is the default when enabled; raw user messages, chart evidence, prompts, model outputs, and answers are not sent unless payload capture is explicitly enabled.

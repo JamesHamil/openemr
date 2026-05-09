@@ -36,9 +36,18 @@ def has_prompt_injection_text(text: str) -> bool:
     return any(term in normalized for term in PROMPT_INJECTION_TERMS)
 
 
-def adapter_warnings(request: AgentForgeRequest) -> list[WarningItem]:
+def adapter_warnings(request: AgentForgeRequest, evidence_plan: EvidencePlan | None = None) -> list[WarningItem]:
     warnings: list[WarningItem] = []
-    for status in request.evidence_bundle.adapter_status:
+    statuses = request.evidence_bundle.adapter_status
+    if evidence_plan and evidence_plan.answer_family == "document_facts":
+        scoped = [status for status in statuses if status.adapter == "agentforge_documents"]
+        statuses = scoped or statuses
+    elif evidence_plan and evidence_plan.answer_family == "labs":
+        scoped = [status for status in statuses if status.adapter in {"labs", "agentforge_documents"}]
+        statuses = scoped or statuses
+        if _has_lab_document_evidence(request):
+            statuses = [status for status in statuses if status.adapter != "labs"]
+    for status in statuses:
         if status.status != "success":
             reason = f": {status.reason}" if status.reason else ""
             display = status.adapter.replace("_", " ")
@@ -49,6 +58,17 @@ def adapter_warnings(request: AgentForgeRequest) -> list[WarningItem]:
                 )
             )
     return warnings
+
+
+def _has_lab_document_evidence(request: AgentForgeRequest) -> bool:
+    return any(
+        source.record_type == "document_fact"
+        and (
+            source.metadata.get("document_type") == "lab_pdf"
+            or "lab_result" in source.field_path.lower()
+        )
+        for source in request.evidence_bundle.sources
+    )
 
 
 def verify_response(
@@ -106,7 +126,7 @@ def verify_response(
 
         checked_claims.append(claim)
 
-    warnings = response.warnings + adapter_warnings(request)
+    warnings = response.warnings + adapter_warnings(request, evidence_plan)
     for source in request.evidence_bundle.sources:
         if has_prompt_injection_text(source.value) or (source.note_span and has_prompt_injection_text(source.note_span)):
             prompt_injection_found = True
