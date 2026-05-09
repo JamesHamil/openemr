@@ -44,7 +44,7 @@ try {
     }
 
     $documentType = (string)($_POST['document_type'] ?? '');
-    if (!in_array($documentType, ['lab_pdf', 'intake_form'], true)) {
+    if (!in_array($documentType, ['lab_pdf', 'intake_form', 'medication_list'], true)) {
         agentforge_extract_json(agentforge_extract_error('Unsupported AgentForge document type.', 'unsupported_document_type'), 400);
     }
 
@@ -135,18 +135,22 @@ try {
         $requestPid
     );
 
-    agentforge_extract_json([
-        'document' => [
-            'agentforge_document_id' => $agentforgeDocumentId,
-            'openemr_document_id' => $openEmrDocumentId,
-            'document_type' => $documentType,
-            'filename' => $filename,
-            'mime_type' => $mimeType,
-            'file_hash' => $hash,
-        ],
-        'extraction' => $extraction,
-        'recent_documents' => $store->recentDocuments($requestPid),
-    ]);
+    $payload = $store->loadDocumentExtraction($requestPid, $openEmrDocumentId, $documentType);
+    if ($payload === null) {
+        $payload = [
+            'document' => [
+                'agentforge_document_id' => $agentforgeDocumentId,
+                'openemr_document_id' => $openEmrDocumentId,
+                'document_type' => $documentType,
+                'filename' => $filename,
+                'mime_type' => $mimeType,
+                'file_hash' => $hash,
+            ],
+            'extraction' => $extraction,
+        ];
+    }
+    $payload['recent_documents'] = $store->recentDocuments($requestPid);
+    agentforge_extract_json($payload);
 } catch (Throwable $e) {
     EventAuditLogger::getInstance()->newEvent(
         'agentforge-document-extract',

@@ -65,6 +65,14 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             margin-bottom: 0.75rem;
             white-space: pre-wrap;
         }
+        .agentforge-stream-progress {
+            color: var(--gray700, #495057);
+            display: grid;
+            gap: 0.35rem;
+        }
+        .agentforge-stream-progress strong {
+            color: var(--gray900, #212529);
+        }
         .agentforge-section {
             margin: 0.75rem 0 0;
         }
@@ -373,17 +381,33 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             trace.appendChild(details);
         }
 
+        function renderStreamProgress(message, elapsed) {
+            answer.innerHTML = '';
+            const node = document.createElement('div');
+            node.className = 'agentforge-stream-progress';
+            const title = document.createElement('strong');
+            title.textContent = message;
+            const detail = document.createElement('div');
+            detail.className = 'text-muted';
+            detail.textContent = 'Waiting for the verified, source-backed response' + (elapsed ? ' (' + elapsed + 's)' : '') + '.';
+            node.appendChild(title);
+            node.appendChild(detail);
+            answer.appendChild(node);
+        }
+
         function send(message) {
             if (top && typeof top.restoreSession === 'function') {
                 top.restoreSession();
             }
             let elapsed = 0;
-            status.textContent = 'Generating... 0s';
+            let currentPhase = 'Starting request';
+            status.textContent = currentPhase + ' 0s';
+            renderStreamProgress(currentPhase, elapsed);
             briefButton.disabled = true;
             askButton.disabled = true;
             const timer = window.setInterval(function () {
                 elapsed += 1;
-                status.textContent = 'Generating... ' + elapsed + 's';
+                status.textContent = currentPhase + ' ' + elapsed + 's';
             }, 1000);
             const data = new URLSearchParams();
             data.set('csrf_token_form', document.getElementById('agentforgeCsrf').value);
@@ -391,14 +415,15 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
             data.set('encounter_id', document.getElementById('agentforgeEncounterId').value);
             data.set('conversation_id', 'rounding-' + document.getElementById('agentforgePatientId').value);
             data.set('message', message);
+            data.set('stream', '1');
 
-            fetch('chat.php', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-                body: data.toString()
-            }).then(function (response) {
-                return response.json();
-            }).then(function (payload) {
+            function updatePhase(message) {
+                currentPhase = message || currentPhase;
+                status.textContent = currentPhase + ' ' + elapsed + 's';
+                renderStreamProgress(currentPhase, elapsed);
+            }
+
+            function applyPayload(payload) {
                 status.textContent = payload.verification_status || 'failed';
                 renderAnswer(payload);
                 renderSources(payload.sources || []);
@@ -406,6 +431,60 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
                     return warning.code + ': ' + warning.message;
                 });
                 renderTrace(payload);
+            }
+
+            function handleStreamLine(line) {
+                if (!line.trim()) {
+                    return;
+                }
+                let event = {};
+                try {
+                    event = JSON.parse(line);
+                } catch (error) {
+                    return;
+                }
+                if (event.schema_version === 'agentforge.response.v1') {
+                    applyPayload(event);
+                    return;
+                }
+                const payload = event.payload || {};
+                if (event.event === 'progress') {
+                    updatePhase(payload.message || currentPhase);
+                    return;
+                }
+                if (event.event === 'final' || event.event === 'error') {
+                    applyPayload(payload);
+                }
+            }
+
+            fetch('chat.php', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                body: data.toString()
+            }).then(async function (response) {
+                const contentType = response.headers.get('Content-Type') || '';
+                if (!response.body || contentType.indexOf('application/x-ndjson') === -1) {
+                    applyPayload(await response.json());
+                    return;
+                }
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                while (true) {
+                    const chunk = await reader.read();
+                    if (chunk.value) {
+                        buffer += decoder.decode(chunk.value, {stream: !chunk.done});
+                        const lines = buffer.split('\n');
+                        buffer = lines.pop() || '';
+                        lines.forEach(handleStreamLine);
+                    }
+                    if (chunk.done) {
+                        break;
+                    }
+                }
+                if (buffer.trim()) {
+                    handleStreamLine(buffer);
+                }
             }).catch(function () {
                 status.textContent = 'failed';
                 answer.textContent = 'Clinical Co-Pilot request failed before a verified response was returned.';

@@ -42,6 +42,7 @@ DOCUMENT_FACT_FIELD_GROUPS = {
     "intake_contact": {"phone", "patient_phone", "emergency_contact_name", "emergency_contact_phone", "emergency_contact_relationship"},
     "pharmacy": {"preferred_pharmacy_name", "pharmacy_phone", "pharmacy_address"},
     "insurance": {"insurance_provider", "provider", "policy_number", "group_number", "policyholder_name"},
+    "medication_list": {"medication", "medication_name", "dose", "dosage", "frequency", "route", "prescriber"},
     "labs": set(LAB_DOCUMENT_FACT_HINTS),
 }
 SEMANTIC_TYPE_HINTS = {
@@ -79,6 +80,11 @@ SEMANTIC_TYPE_HINTS = {
         "email",
         "address",
         "demographic",
+        "medication",
+        "medications",
+        "med",
+        "meds",
+        "dose",
     },
     "guideline": {"guideline", "recommend", "follow", "review", "risk", "red", "flag"},
 }
@@ -128,7 +134,7 @@ TOOL_DEFINITIONS = [
             "properties": {
                 "document_type": {
                     "type": "string",
-                    "description": "Optional document type filter like intake_form or lab_pdf.",
+                    "description": "Optional document type filter like intake_form, lab_pdf, or medication_list.",
                 },
                 "fields": {
                     "type": "array",
@@ -137,7 +143,7 @@ TOOL_DEFINITIONS = [
                 },
                 "field_group": {
                     "type": "string",
-                    "description": "Optional group: phone_numbers, intake_contact, pharmacy, insurance, labs.",
+                    "description": "Optional group: phone_numbers, intake_contact, pharmacy, insurance, medication_list, labs.",
                 },
                 "limit": {"type": "integer"},
             },

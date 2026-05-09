@@ -19,9 +19,24 @@ use OpenEMR\Common\Logging\EventAuditLogger;
 use OpenEMR\Modules\AgentForge\AgentForgeEvidenceCollector;
 use OpenEMR\Modules\AgentForge\AgentForgeSidecarClient;
 
-header('Content-Type: application/json');
+$agentforgeStreamResponse = $_SERVER['REQUEST_METHOD'] === 'POST' && (string)($_POST['stream'] ?? '') === '1';
+header('Content-Type: ' . ($agentforgeStreamResponse ? 'application/x-ndjson' : 'application/json'));
+if ($agentforgeStreamResponse) {
+    header('Cache-Control: no-cache');
+    header('X-Accel-Buffering: no');
+    @ini_set('zlib.output_compression', '0');
+    @ini_set('output_buffering', 'off');
+    while (ob_get_level() > 0) {
+        @ob_end_flush();
+    }
+    ob_implicit_flush(true);
+}
 
 $session = agentforge_openemr_session();
+$auditUser = '';
+$auditProvider = '';
+$sessionPid = '';
+$requestPid = '';
 
 try {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -36,6 +51,8 @@ try {
         agentforge_json_response(agentforge_error_response('Access denied.', 'access_denied', 'refused'), 403);
     }
 
+    $auditUser = (string)agentforge_session_get($session, 'authUser', '');
+    $auditProvider = (string)agentforge_session_get($session, 'authProvider', '');
     $sessionPid = (string)agentforge_session_get($session, 'pid', '');
     $requestPid = (string)($_POST['patient_id'] ?? '');
     if ($sessionPid === '' || $requestPid === '' || $sessionPid !== $requestPid || !ctype_digit($requestPid)) {
@@ -61,49 +78,61 @@ try {
 
     $collector = new AgentForgeEvidenceCollector();
     $bundle = $collector->collect($requestPid, $encounterId, $message);
+    agentforge_stream_event('progress', [
+        'message' => 'Evidence collected',
+        'source_count' => count($bundle['sources'] ?? []),
+    ]);
     $cacheKey = agentforge_cache_key($requestPid, $encounterId, $message, $bundle);
-    $cachedResponse = agentforge_cache_get($session, $cacheKey);
+    $cachedResponse = $agentforgeStreamResponse ? null : agentforge_cache_get($session, $cacheKey);
     if (is_array($cachedResponse)) {
         EventAuditLogger::getInstance()->newEvent(
             'agentforge-chart-brief',
-            (string)agentforge_session_get($session, 'authUser', ''),
-            (string)agentforge_session_get($session, 'authProvider', ''),
+            $auditUser,
+            $auditProvider,
             1,
             'cache_hit=1 trace_id=' . ($cachedResponse['trace_id'] ?? 'missing') . ' status=' . ($cachedResponse['verification_status'] ?? 'unknown'),
             $requestPid
         );
+        agentforge_stream_event('progress', ['message' => 'Rendering cached verified answer']);
         agentforge_json_response($cachedResponse);
     }
 
-    $request = agentforge_build_request($session, $conversationId, $message, $bundle);
+    $request = agentforge_build_request($auditUser, $conversationId, $message, $bundle);
 
     $client = new AgentForgeSidecarClient();
+    agentforge_stream_event('progress', [
+        'message' => 'Composing and verifying response',
+        'source_count' => count($bundle['sources'] ?? []),
+    ]);
     $response = $client->send($request);
-    agentforge_cache_set($session, $cacheKey, $response);
+    if (!$agentforgeStreamResponse) {
+        agentforge_cache_set($session, $cacheKey, $response);
+    }
 
     EventAuditLogger::getInstance()->newEvent(
         'agentforge-chart-brief',
-        (string)agentforge_session_get($session, 'authUser', ''),
-        (string)agentforge_session_get($session, 'authProvider', ''),
+        $auditUser,
+        $auditProvider,
         1,
         'trace_id=' . ($response['trace_id'] ?? 'missing') . ' status=' . ($response['verification_status'] ?? 'unknown'),
         $requestPid
     );
 
+    agentforge_stream_event('progress', ['message' => 'Rendering verified response']);
     agentforge_json_response($response);
 } catch (Throwable $e) {
     EventAuditLogger::getInstance()->newEvent(
         'agentforge-chart-brief',
-        (string)agentforge_session_get($session, 'authUser', ''),
-        (string)agentforge_session_get($session, 'authProvider', ''),
+        $auditUser,
+        $auditProvider,
         0,
         'controlled failure=' . $e->getMessage(),
-        (string)agentforge_session_get($session, 'pid', '')
+        $requestPid !== '' ? $requestPid : $sessionPid
     );
     agentforge_json_response(agentforge_error_response('Clinical Co-Pilot returned a controlled failure.', 'endpoint_exception'), 500);
 }
 
-function agentforge_build_request($session, string $conversationId, string $message, array $bundle): array
+function agentforge_build_request(string $authUser, string $conversationId, string $message, array $bundle): array
 {
     $pid = (string)$bundle['patient_context']['patient_id'];
     $encounterId = (string)$bundle['patient_context']['encounter_id'];
@@ -114,7 +143,7 @@ function agentforge_build_request($session, string $conversationId, string $mess
         'expires_at' => gmdate('c', time() + 300),
         'purpose' => 'patient_rounding_brief',
         'scope' => [
-            'user_hash' => hash('sha256', (string)agentforge_session_get($session, 'authUser', '')),
+            'user_hash' => hash('sha256', $authUser),
             'patient_hash' => hash('sha256', $pid),
             'encounter_hash' => hash('sha256', $encounterId),
             'evidence_bundle_id' => (string)$bundle['id'],
@@ -194,6 +223,23 @@ function agentforge_cache_set($session, string $key, array $response): void
 function agentforge_json_response(array $payload, int $status = 200): void
 {
     http_response_code($status);
+    if (($GLOBALS['agentforgeStreamResponse'] ?? false) === true) {
+        agentforge_stream_event($status >= 400 ? 'error' : 'final', $payload);
+        exit;
+    }
     echo json_encode($payload);
     exit;
+}
+
+function agentforge_stream_event(string $event, array $payload = []): void
+{
+    if (($GLOBALS['agentforgeStreamResponse'] ?? false) !== true) {
+        return;
+    }
+    echo json_encode([
+        'event' => $event,
+        'payload' => $payload,
+    ], JSON_UNESCAPED_SLASHES) . "\n";
+    @ob_flush();
+    flush();
 }

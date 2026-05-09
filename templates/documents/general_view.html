@@ -98,69 +98,388 @@ function tagProcedure() {
 	document.forms['procedure_tag'].submit();
 }
 
+let agentForgeCurrentPayload = null;
+let agentForgeCurrentFacts = [];
+let agentForgeOriginalFacts = [];
+let agentForgeFactEditMode = false;
+let agentForgeSavedFactsAvailable = false;
+
+function cloneAgentForgeValue(value) {
+    return JSON.parse(JSON.stringify(value || null));
+}
+
+function agentForgeDocumentFactsEndpoint() {
+    return {$webroot|js_escape} + '/interface/modules/custom_modules/agentforge/public/document_facts.php';
+}
+
+function agentForgePostData(action, docid, patientId) {
+    let data = new URLSearchParams();
+    data.set('csrf_token_form', {$csrf_token_form|js_escape});
+    data.set('patient_id', patientId);
+    data.set('openemr_document_id', docid);
+    data.set('action', action);
+    return data;
+}
+
+function agentForgeFetchOptions(data) {
+    let requestOptions = new Object();
+    requestOptions.method = 'POST';
+    requestOptions.credentials = 'same-origin';
+    requestOptions.headers = new Headers();
+    requestOptions.headers.append('Content-Type', 'application/x-www-form-urlencoded');
+    requestOptions.body = data.toString();
+    return requestOptions;
+}
+
 function clearAgentForgeExtractionPreview() {
+    agentForgeCurrentPayload = null;
+    agentForgeCurrentFacts = [];
+    agentForgeOriginalFacts = [];
+    agentForgeFactEditMode = false;
+    agentForgeSavedFactsAvailable = false;
     $('#agentforgeFactTableBody').empty();
     $('#agentforgeFactJson').text('');
     $('#agentforgeFactEmpty').removeClass('d-none');
     $('#agentforgeFactPreview').addClass('d-none');
+    updateAgentForgeFactControls();
     clearAgentForgeCitationPreview();
 }
 
 function renderAgentForgeExtractionPreview(payload) {
     let extraction = payload.extraction || {};
-    let facts = extraction.extracted_facts || [];
+    agentForgeCurrentPayload = payload || {};
+    agentForgeCurrentFacts = cloneAgentForgeValue(extraction.extracted_facts || []) || [];
+    agentForgeOriginalFacts = [];
+    agentForgeFactEditMode = false;
+    agentForgeSavedFactsAvailable = Boolean(payload.document && payload.document.agentforge_document_id);
+    if (payload.document && payload.document.document_type) {
+        $('#agentforgeDocumentType').val(payload.document.document_type);
+    }
+    renderAgentForgeFactRows();
+    updateAgentForgeFactControls();
+}
+
+function renderAgentForgeFactRows() {
     let tableBody = $('#agentforgeFactTableBody');
     let factJson = $('#agentforgeFactJson');
     tableBody.empty();
-    factJson.text(JSON.stringify({
-        document: payload.document || {},
-        extraction_status: extraction.extraction_status || 'unknown',
-        extracted_facts: facts,
-        warnings: extraction.warnings || [],
-        worker_handoffs: extraction.worker_handoffs || [],
-        trace_id: extraction.trace_id || ''
-    }, null, 2));
+    factJson.text(JSON.stringify(agentForgePayloadForDisplay(), null, 2));
 
-    if (!facts.length) {
-        $('#agentforgeFactPreview').removeClass('d-none');
-        $('#agentforgeFactEmpty').removeClass('d-none');
+    if (!agentForgeCurrentPayload) {
+        $('#agentforgeFactPreview').addClass('d-none');
         return;
     }
 
     $('#agentforgeFactPreview').removeClass('d-none');
-    $('#agentforgeFactEmpty').addClass('d-none');
-    facts.forEach(function (fact, index) {
-        let citation = fact.citation || {};
-        let row = $('<tr></tr>').attr('data-agentforge-fact-index', index);
-        $('<td class="text-muted"></td>').text(index + 1).appendTo(row);
-        $('<td></td>').text(fact.label || fact.fact_type || 'Document fact').appendTo(row);
-        $('<td></td>').text(formatAgentForgeFactValue(fact)).appendTo(row);
-        $('<td></td>').text(fact.abnormal_flag || '').appendTo(row);
-        $('<td></td>').text(formatAgentForgeConfidence(fact.confidence)).appendTo(row);
-        let citationCell = $('<td class="agentforge-citation-cell"></td>');
-        if (hasAgentForgePreviewableCitation(fact)) {
-            $('<button type="button" class="btn btn-link btn-sm agentforge-preview-link"></button>')
-                .text({xlj t='Preview'})
-                .on('click', function () {
-                    renderAgentForgeCitationPreview(fact, index);
-                })
-                .appendTo(citationCell);
+    $('#agentforgeFactEmpty').toggleClass('d-none', agentForgeCurrentFacts.length > 0);
+
+    agentForgeCurrentFacts.forEach(function (fact, index) {
+        if (agentForgeFactEditMode) {
+            renderAgentForgeEditableFactRow(tableBody, fact, index);
+        } else {
+            renderAgentForgeReadonlyFactRow(tableBody, fact, index);
         }
-        $('<span></span>').text(formatAgentForgeCitation(citation)).appendTo(citationCell);
-        citationCell.appendTo(row);
-        tableBody.append(row);
     });
 
-    let firstPreviewableIndex = facts.findIndex(function (fact) {
+    if (agentForgeFactEditMode) {
+        clearAgentForgeCitationPreview();
+        return;
+    }
+
+    let firstPreviewableIndex = agentForgeCurrentFacts.findIndex(function (fact) {
         return hasAgentForgePreviewableCitation(fact);
     });
     if (firstPreviewableIndex >= 0) {
         window.setTimeout(function () {
-            renderAgentForgeCitationPreview(facts[firstPreviewableIndex], firstPreviewableIndex);
+            renderAgentForgeCitationPreview(agentForgeCurrentFacts[firstPreviewableIndex], firstPreviewableIndex);
         }, 0);
     } else {
         clearAgentForgeCitationPreview();
     }
+}
+
+function agentForgePayloadForDisplay() {
+    let payload = cloneAgentForgeValue(agentForgeCurrentPayload) || {};
+    payload.extraction = payload.extraction || {};
+    payload.extraction.extracted_facts = agentForgeCurrentFacts;
+    return {
+        document: payload.document || {},
+        extraction_status: payload.extraction.extraction_status || 'unknown',
+        extracted_facts: agentForgeCurrentFacts,
+        warnings: payload.extraction.warnings || [],
+        worker_handoffs: payload.extraction.worker_handoffs || [],
+        trace_id: payload.extraction.trace_id || ''
+    };
+}
+
+function renderAgentForgeReadonlyFactRow(tableBody, fact, index) {
+    let citation = fact.citation || {};
+    let row = $('<tr></tr>').attr('data-agentforge-fact-index', index);
+    $('<td class="text-muted agentforge-index-cell"></td>').text(index + 1).appendTo(row);
+    let factCell = $('<td class="agentforge-fact-name-cell"></td>');
+    $('<div class="agentforge-fact-name"></div>').text(fact.label || fact.fact_type || 'Document fact').appendTo(factCell);
+    appendAgentForgeFactMeta(factCell, fact);
+    factCell.appendTo(row);
+
+    let valueCell = $('<td class="agentforge-fact-value-cell"></td>');
+    $('<div class="agentforge-fact-value"></div>').text(fact.value || '').appendTo(valueCell);
+    appendAgentForgeValueMeta(valueCell, fact);
+    valueCell.appendTo(row);
+
+    let citationCell = $('<td class="agentforge-citation-cell"></td>');
+    if (hasAgentForgePreviewableCitation(fact)) {
+        $('<button type="button" class="btn btn-link btn-sm agentforge-preview-link"></button>')
+            .text({xlj t='Preview'})
+            .on('click', function () {
+                renderAgentForgeCitationPreview(fact, index);
+            })
+            .appendTo(citationCell);
+    }
+    $('<span></span>').text(formatAgentForgeCitation(citation)).appendTo(citationCell);
+    citationCell.appendTo(row);
+    $('<td></td>').appendTo(row);
+    tableBody.append(row);
+}
+
+function appendAgentForgeFactMeta(cell, fact) {
+    let meta = [];
+    if (fact.abnormal_flag) {
+        meta.push(fact.abnormal_flag);
+    }
+    if (fact.recorded_at) {
+        meta.push(fact.recorded_at);
+    }
+    if (meta.length) {
+        $('<div class="agentforge-fact-meta"></div>').text(meta.join(' | ')).appendTo(cell);
+    }
+}
+
+function appendAgentForgeValueMeta(cell, fact) {
+    let meta = [];
+    let confidence = formatAgentForgeConfidence(fact.confidence);
+    if (confidence) {
+        meta.push({xlj t='Confidence'} + ': ' + confidence);
+    }
+    if (fact.unit && String(fact.value || '').indexOf(String(fact.unit)) === -1) {
+        meta.push({xlj t='Unit'} + ': ' + fact.unit);
+    }
+    if (fact.reference_range) {
+        meta.push({xlj t='Range'} + ': ' + fact.reference_range);
+    }
+    if (meta.length) {
+        $('<div class="agentforge-fact-meta"></div>').text(meta.join(' | ')).appendTo(cell);
+    }
+}
+
+function renderAgentForgeEditableFactRow(tableBody, fact, index) {
+    let citation = fact.citation || {};
+    let row = $('<tr class="agentforge-fact-edit-row"></tr>')
+        .attr('data-agentforge-fact-index', index)
+        .attr('data-agentforge-fact-type', fact.fact_type || 'document_fact');
+    $('<td class="text-muted agentforge-index-cell"></td>').text(index + 1).appendTo(row);
+
+    let factCell = $('<td class="agentforge-fact-edit-cell"></td>');
+    appendAgentForgeLabeledInput(factCell, 'agentforge-edit-label', fact.label || '', {xlj t='Fact'});
+    appendAgentForgeLabeledInput(factCell, 'agentforge-edit-flag', fact.abnormal_flag || '', {xlj t='Flag'});
+    appendAgentForgeLabeledInput(factCell, 'agentforge-edit-recorded-at', fact.recorded_at || '', {xlj t='Date'});
+    factCell.appendTo(row);
+
+    let valueCell = $('<td class="agentforge-fact-edit-cell"></td>');
+    appendAgentForgeLabeledInput(valueCell, 'agentforge-edit-value', fact.value || '', {xlj t='Value'});
+    appendAgentForgeLabeledInput(valueCell, 'agentforge-edit-unit', fact.unit || '', {xlj t='Unit'});
+    appendAgentForgeLabeledInput(valueCell, 'agentforge-edit-reference-range', fact.reference_range || '', {xlj t='Range'});
+    appendAgentForgeLabeledInput(valueCell, 'agentforge-edit-confidence', agentForgeConfidencePercent(fact.confidence), {xlj t='Confidence'});
+    valueCell.appendTo(row);
+
+    let citationCell = $('<td class="agentforge-citation-edit-cell"></td>');
+    appendAgentForgeLabeledInput(citationCell, 'agentforge-edit-citation-page', citation.page_or_section || '', {xlj t='Page or section'});
+    appendAgentForgeLabeledInput(citationCell, 'agentforge-edit-citation-field', citation.field_or_chunk_id || '', {xlj t='Citation field'});
+    appendAgentForgeLabeledInput(citationCell, 'agentforge-edit-citation-quote', citation.quote_or_value || '', {xlj t='Citation quote'});
+    citationCell.appendTo(row);
+
+    let actionCell = $('<td></td>');
+    $('<button type="button" class="btn btn-link btn-sm text-danger agentforge-remove-fact"></button>')
+        .text({xlj t='Remove'})
+        .on('click', function () {
+            removeAgentForgeFact(index);
+        })
+        .appendTo(actionCell);
+    actionCell.appendTo(row);
+    tableBody.append(row);
+}
+
+function appendAgentForgeLabeledInput(cell, className, value, label) {
+    let group = $('<label class="agentforge-edit-field"></label>');
+    $('<span></span>').text(label).appendTo(group);
+    $('<input type="text" class="form-control form-control-sm agentforge-fact-edit-input">')
+        .addClass(className)
+        .attr('aria-label', label)
+        .val(value)
+        .appendTo(group);
+    group.appendTo(cell);
+}
+
+function agentForgeConfidencePercent(confidence) {
+    let numeric = Number(confidence);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+        return '';
+    }
+    return String(Math.round(numeric * 100));
+}
+
+function updateAgentForgeFactControls() {
+    $('#agentforgeExtractButton').text(agentForgeSavedFactsAvailable ? {xlj t='Re-extract'} : {xlj t='Extract'});
+    $('#agentforgeFactEditButton').toggleClass('d-none', agentForgeFactEditMode || !agentForgeCurrentPayload);
+    $('#agentforgeFactSaveButton, #agentforgeFactCancelButton, #agentforgeFactAddButton').toggleClass('d-none', !agentForgeFactEditMode);
+    $('#agentforgeDocumentType').prop('disabled', agentForgeFactEditMode);
+}
+
+function beginAgentForgeFactEdit() {
+    if (!agentForgeCurrentPayload) {
+        return false;
+    }
+    agentForgeOriginalFacts = cloneAgentForgeValue(agentForgeCurrentFacts) || [];
+    agentForgeFactEditMode = true;
+    renderAgentForgeFactRows();
+    updateAgentForgeFactControls();
+    return false;
+}
+
+function cancelAgentForgeFactEdit() {
+    agentForgeCurrentFacts = cloneAgentForgeValue(agentForgeOriginalFacts) || [];
+    agentForgeOriginalFacts = [];
+    agentForgeFactEditMode = false;
+    renderAgentForgeFactRows();
+    updateAgentForgeFactControls();
+    return false;
+}
+
+function addAgentForgeFact() {
+    let documentType = agentForgeCurrentPayload && agentForgeCurrentPayload.document && agentForgeCurrentPayload.document.document_type ?
+        agentForgeCurrentPayload.document.document_type :
+        $('#agentforgeDocumentType').val();
+    agentForgeCurrentFacts.push({
+        fact_type: 'document_fact',
+        label: 'Document fact',
+        value: '',
+        unit: '',
+        reference_range: '',
+        abnormal_flag: '',
+        recorded_at: '',
+        confidence: 1,
+        citation: {
+            source_type: documentType,
+            source_id: 'openemr-document-' + String(docid || ''),
+            page_or_section: '',
+            field_or_chunk_id: 'document_fact-' + String(agentForgeCurrentFacts.length + 1),
+            quote_or_value: ''
+        }
+    });
+    renderAgentForgeFactRows();
+    updateAgentForgeFactControls();
+    return false;
+}
+
+function removeAgentForgeFact(index) {
+    agentForgeCurrentFacts.splice(index, 1);
+    renderAgentForgeFactRows();
+    updateAgentForgeFactControls();
+}
+
+function collectAgentForgeEditedFacts() {
+    let facts = [];
+    $('#agentforgeFactTableBody .agentforge-fact-edit-row').each(function () {
+        let row = $(this);
+        let index = Number(row.attr('data-agentforge-fact-index'));
+        let original = agentForgeCurrentFacts[index] || {};
+        let citation = cloneAgentForgeValue(original.citation || {}) || {};
+        citation.page_or_section = row.find('.agentforge-edit-citation-page').val() || '';
+        citation.field_or_chunk_id = row.find('.agentforge-edit-citation-field').val() || '';
+        citation.quote_or_value = row.find('.agentforge-edit-citation-quote').val() || '';
+        let confidencePercent = Number(row.find('.agentforge-edit-confidence').val());
+        let confidence = Number.isFinite(confidencePercent) ? Math.max(0, Math.min(confidencePercent / 100, 1)) : 0;
+        facts.push({
+            id: original.id || '',
+            fact_type: row.attr('data-agentforge-fact-type') || original.fact_type || 'document_fact',
+            label: row.find('.agentforge-edit-label').val() || 'Document fact',
+            value: row.find('.agentforge-edit-value').val() || '',
+            unit: row.find('.agentforge-edit-unit').val() || '',
+            reference_range: row.find('.agentforge-edit-reference-range').val() || '',
+            abnormal_flag: row.find('.agentforge-edit-flag').val() || '',
+            recorded_at: row.find('.agentforge-edit-recorded-at').val() || '',
+            confidence: confidence,
+            citation: citation
+        });
+    });
+    return facts;
+}
+
+function loadAgentForgeStoredFacts(docid, patientId) {
+    let status = $('#agentforgeExtractStatus');
+    let data = agentForgePostData('load', docid, patientId);
+    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Loading saved AgentForge facts...'});
+
+    fetch(agentForgeDocumentFactsEndpoint(), agentForgeFetchOptions(data)).then(function (response) {
+        return response.json();
+    }).then(function (payload) {
+        if (payload.error) {
+            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='Unable to load saved AgentForge facts.'});
+            return;
+        }
+        if (payload.empty) {
+            agentForgeSavedFactsAvailable = false;
+            updateAgentForgeFactControls();
+            status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='No saved AgentForge facts yet.'});
+            return;
+        }
+        renderAgentForgeExtractionPreview(payload);
+        let facts = (payload.extraction && payload.extraction.extracted_facts) || [];
+        status.removeClass('text-muted text-danger').addClass('text-success').text(
+            {xlj t='Loaded saved AgentForge facts:'} + ' ' + facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
+        );
+    }).catch(function () {
+        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='Unable to load saved AgentForge facts.'});
+    });
+}
+
+function saveAgentForgeFacts(docid, patientId) {
+    if (!agentForgeFactEditMode) {
+        return false;
+    }
+    if (top && typeof top.restoreSession === 'function') {
+        top.restoreSession();
+    }
+    let button = $('#agentforgeFactSaveButton');
+    let status = $('#agentforgeExtractStatus');
+    let documentType = agentForgeCurrentPayload && agentForgeCurrentPayload.document && agentForgeCurrentPayload.document.document_type ?
+        agentForgeCurrentPayload.document.document_type :
+        $('#agentforgeDocumentType').val();
+    let facts = collectAgentForgeEditedFacts();
+    let data = agentForgePostData('save', docid, patientId);
+    data.set('document_type', documentType);
+    data.set('facts_json', JSON.stringify(facts));
+
+    button.prop('disabled', true);
+    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Saving AgentForge facts...'});
+
+    fetch(agentForgeDocumentFactsEndpoint(), agentForgeFetchOptions(data)).then(function (response) {
+        return response.json();
+    }).then(function (payload) {
+        if (payload.error) {
+            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='Unable to save AgentForge facts.'});
+            return;
+        }
+        renderAgentForgeExtractionPreview(payload);
+        let savedFacts = (payload.extraction && payload.extraction.extracted_facts) || [];
+        status.removeClass('text-muted text-danger').addClass('text-success').text(
+            {xlj t='Saved AgentForge facts:'} + ' ' + savedFacts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
+        );
+    }).catch(function () {
+        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='Unable to save AgentForge facts.'});
+    }).finally(function () {
+        button.prop('disabled', false);
+    });
+    return false;
 }
 
 function formatAgentForgeFactValue(fact) {
@@ -309,13 +628,15 @@ function renderAgentForgePdfCitation(fact) {
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
         canvas.className = 'agentforge-citation-canvas';
-        stage.empty().append(canvas);
+        let pageNode = $('<div class="agentforge-citation-page"></div>');
+        stage.empty().append(pageNode);
+        pageNode.append(canvas);
         return page.render({ldelim}canvasContext: context, viewport: viewport{rdelim}).promise.then(function () {
             return resolveAgentForgeTextBox(page, viewport, fact).then(function (textBox) {
                 let modelBox = hasAgentForgeBoundingBox(citation) ? citation.bounding_box : null;
                 let highlightBox = textBox || modelBox;
                 if (highlightBox) {
-                    addAgentForgeHighlight(stage, highlightBox, textBox ? 'text' : 'model');
+                    addAgentForgeHighlight(pageNode, highlightBox, textBox ? 'text' : 'model');
                 }
                 let statusSuffix = '';
                 if (textBox) {
@@ -336,9 +657,10 @@ function renderAgentForgePdfCitation(fact) {
 function renderAgentForgeImageCitation(citation) {
     let stage = $('#agentforgeCitationStage');
     let image = $('<img class="agentforge-citation-image" alt="">');
+    let pageNode = $('<div class="agentforge-citation-page"></div>');
     image.on('load', function () {
         if (hasAgentForgeBoundingBox(citation)) {
-            addAgentForgeHighlight(stage, citation.bounding_box);
+            addAgentForgeHighlight(pageNode, citation.bounding_box);
             $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation) + ' | model-provided highlight');
         } else {
             $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation));
@@ -347,7 +669,8 @@ function renderAgentForgeImageCitation(citation) {
     image.on('error', function () {
         $('#agentforgeCitationStatus').text({xlj t='Unable to render the cited image.'});
     });
-    stage.empty().append(image);
+    stage.empty().append(pageNode);
+    pageNode.append(image);
     image.attr('src', agentforgeDocumentContentUrl);
 }
 
@@ -437,6 +760,12 @@ function extractWithAgentForge(docid, patientId) {
     if (top && typeof top.restoreSession === 'function') {
         top.restoreSession();
     }
+    if (agentForgeFactEditMode && !confirm({xlj t='Discard unsaved fact edits and extract again?'})) {
+        return false;
+    }
+    if (agentForgeSavedFactsAvailable && !confirm({xlj t='Saved AgentForge facts already exist. Re-extracting will replace any manual edits. Continue?'})) {
+        return false;
+    }
     let button = $('#agentforgeExtractButton');
     let status = $('#agentforgeExtractStatus');
     let data = new URLSearchParams();
@@ -446,6 +775,7 @@ function extractWithAgentForge(docid, patientId) {
     data.set('openemr_document_id', docid);
 
     button.prop('disabled', true);
+    agentForgeFactEditMode = false;
     status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Extracting document evidence...'});
     clearAgentForgeExtractionPreview();
 
@@ -579,21 +909,43 @@ function extractWithAgentForge(docid, patientId) {
     margin: 0;
 }
 
+.agentforge-fact-controls {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+}
+
+.agentforge-fact-workspace {
+    align-items: start;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: minmax(0, 1.1fr) minmax(360px, 0.9fr);
+}
+
+.agentforge-fact-panel,
+.agentforge-citation-panel {
+    min-width: 0;
+}
+
 .agentforge-fact-table-wrap {
     border: 1px solid var(--gray300);
     border-radius: 4px;
-    max-height: 260px;
-    overflow: auto;
+    max-height: 520px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 .agentforge-fact-table {
     font-size: 0.82rem;
     margin-bottom: 0;
-    min-width: 820px;
+    table-layout: fixed;
+    width: 100%;
 }
 
 .agentforge-fact-table td,
 .agentforge-fact-table th {
+    overflow-wrap: anywhere;
     vertical-align: top;
 }
 
@@ -604,10 +956,69 @@ function extractWithAgentForge(docid, patientId) {
     z-index: 1;
 }
 
+.agentforge-col-index {
+    width: 2.5rem;
+}
+
+.agentforge-col-fact {
+    width: 22%;
+}
+
+.agentforge-col-value {
+    width: 28%;
+}
+
+.agentforge-col-citation {
+    width: auto;
+}
+
+.agentforge-col-actions {
+    width: 5rem;
+}
+
 .agentforge-citation-cell {
     color: var(--gray600);
-    min-width: 18rem;
     overflow-wrap: anywhere;
+}
+
+.agentforge-index-cell {
+    width: 2.5rem;
+}
+
+.agentforge-fact-name,
+.agentforge-fact-value {
+    color: var(--gray900);
+    font-weight: 600;
+}
+
+.agentforge-fact-meta {
+    color: var(--gray600);
+    font-size: 0.76rem;
+    line-height: 1.3;
+    margin-top: 0.15rem;
+}
+
+.agentforge-edit-field {
+    color: var(--gray700);
+    display: block;
+    font-size: 0.72rem;
+    font-weight: 600;
+    margin: 0 0 0.35rem;
+}
+
+.agentforge-edit-field span {
+    display: block;
+    margin-bottom: 0.1rem;
+}
+
+.agentforge-fact-edit-input {
+    font-size: 0.78rem;
+    min-width: 0;
+    width: 100%;
+}
+
+.agentforge-edit-confidence {
+    max-width: 6rem;
 }
 
 .agentforge-preview-link {
@@ -623,8 +1034,10 @@ function extractWithAgentForge(docid, patientId) {
 .agentforge-citation-preview {
     border: 1px solid var(--gray300);
     border-radius: 4px;
-    margin-top: 0.75rem;
+    margin-top: 0;
     padding: 0.75rem;
+    position: sticky;
+    top: 0.5rem;
 }
 
 .agentforge-citation-preview-header {
@@ -644,17 +1057,23 @@ function extractWithAgentForge(docid, patientId) {
 .agentforge-citation-stage {
     background: #343a40;
     display: block;
-    width: fit-content;
     max-width: 100%;
+    max-height: 70vh;
     overflow: auto;
+}
+
+.agentforge-citation-page {
+    display: block;
+    line-height: 0;
     position: relative;
+    width: fit-content;
 }
 
 .agentforge-citation-canvas,
 .agentforge-citation-image {
     display: block;
     height: auto;
-    max-width: 100%;
+    max-width: none;
 }
 
 .agentforge-citation-highlight {
@@ -721,6 +1140,16 @@ function extractWithAgentForge(docid, patientId) {
         flex: 1 1 auto;
     }
 }
+
+@media (max-width: 1100px) {
+    .agentforge-fact-workspace {
+        grid-template-columns: 1fr;
+    }
+
+    .agentforge-citation-preview {
+        position: static;
+    }
+}
 {/literal}
 </style>
 
@@ -735,13 +1164,14 @@ function extractWithAgentForge(docid, patientId) {
                 <button class="btn btn-sm btn-primary active">{xlt t='Contents'}</button>
               </div>
             </div>
-            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};var agentforgeDocumentName = {$file->get_name()|js_escape};var agentforgeDocumentContentUrl = {$web_path|js_escape} + 'as_file=false';</script>
+            <script>var file = {$file->get_url()|js_escape};var mime = {$file->get_mimetype()|js_escape};var docid = {$file->get_id()|js_escape};var agentforgePatientId = {$file->get_foreign_id()|js_escape};var agentforgeDocumentName = {$file->get_name()|js_escape};var agentforgeDocumentContentUrl = {$web_path|js_escape} + 'as_file=false';</script>
             <div class="agentforge-doc-toolbar">
               <div class="agentforge-action-group agentforge-extract-actions">
                 <label for="agentforgeDocumentType">{xlt t='AgentForge'}</label>
                 <select id="agentforgeDocumentType" class="form-control form-control-sm d-inline-block align-middle" aria-label="{xla t='AgentForge document type'}">
                   <option value="lab_pdf">{xlt t='Lab PDF'}</option>
                   <option value="intake_form">{xlt t='Intake Form'}</option>
+                  <option value="medication_list">{xlt t='Medication List'}</option>
                 </select>
                 <button id="agentforgeExtractButton" type="button" class="btn btn-primary btn-sm" onclick="extractWithAgentForge({$file->get_id()|attr_js}, {$file->get_foreign_id()|attr_js}); return false;">{xlt t='Extract'}</button>
               </div>
@@ -757,36 +1187,54 @@ function extractWithAgentForge(docid, patientId) {
             <div id="agentforgeFactPreview" class="agentforge-fact-preview d-none">
               <div class="agentforge-fact-preview-header">
                 <h5 class="agentforge-fact-preview-title">{xlt t='Extracted Structured Facts'}</h5>
-                <span class="text-muted small">{xlt t='These facts are stored as AgentForge document evidence.'}</span>
+                <div class="agentforge-fact-controls">
+                  <span class="text-muted small">{xlt t='These facts are stored as AgentForge document evidence.'}</span>
+                  <button id="agentforgeFactEditButton" type="button" class="btn btn-secondary btn-sm d-none" onclick="return beginAgentForgeFactEdit();">{xlt t='Edit facts'}</button>
+                  <button id="agentforgeFactAddButton" type="button" class="btn btn-secondary btn-sm d-none" onclick="return addAgentForgeFact();">{xlt t='Add fact'}</button>
+                  <button id="agentforgeFactSaveButton" type="button" class="btn btn-primary btn-sm d-none" onclick="return saveAgentForgeFacts({$file->get_id()|attr_js}, {$file->get_foreign_id()|attr_js});">{xlt t='Save'}</button>
+                  <button id="agentforgeFactCancelButton" type="button" class="btn btn-secondary btn-sm d-none" onclick="return cancelAgentForgeFactEdit();">{xlt t='Cancel'}</button>
+                </div>
               </div>
               <div id="agentforgeFactEmpty" class="alert alert-warning py-2 d-none">{xlt t='No structured facts were returned for this extraction.'}</div>
-              <div class="agentforge-fact-table-wrap">
-                <table class="table table-sm table-striped agentforge-fact-table">
-                  <thead>
-                    <tr>
-                      <th scope="col">#</th>
-                      <th scope="col">{xlt t='Fact'}</th>
-                      <th scope="col">{xlt t='Value'}</th>
-                      <th scope="col">{xlt t='Flag'}</th>
-                      <th scope="col">{xlt t='Confidence'}</th>
-                      <th scope="col">{xlt t='Citation'}</th>
-                    </tr>
-                  </thead>
-                  <tbody id="agentforgeFactTableBody"></tbody>
-                </table>
-              </div>
-              <div id="agentforgeCitationPreview" class="agentforge-citation-preview d-none">
-                <div class="agentforge-citation-preview-header">
-                  <h5 class="agentforge-citation-preview-title">{xlt t='Citation Preview'}</h5>
-                  <button type="button" class="btn btn-link btn-sm p-0" onclick="clearAgentForgeCitationPreview(); return false;">{xlt t='Close'}</button>
+              <div class="agentforge-fact-workspace">
+                <div class="agentforge-fact-panel">
+                  <div class="agentforge-fact-table-wrap">
+                    <table class="table table-sm table-striped agentforge-fact-table">
+                      <colgroup>
+                        <col class="agentforge-col-index">
+                        <col class="agentforge-col-fact">
+                        <col class="agentforge-col-value">
+                        <col class="agentforge-col-citation">
+                        <col class="agentforge-col-actions">
+                      </colgroup>
+                      <thead>
+                        <tr>
+                          <th scope="col">#</th>
+                          <th scope="col">{xlt t='Fact'}</th>
+                          <th scope="col">{xlt t='Value'}</th>
+                          <th scope="col">{xlt t='Citation'}</th>
+                          <th scope="col">{xlt t='Actions'}</th>
+                        </tr>
+                      </thead>
+                      <tbody id="agentforgeFactTableBody"></tbody>
+                    </table>
+                  </div>
+                  <details class="agentforge-json-panel">
+                    <summary>{xlt t='Raw extraction JSON'}</summary>
+                    <pre id="agentforgeFactJson"></pre>
+                  </details>
                 </div>
-                <div id="agentforgeCitationStatus" class="agentforge-citation-status"></div>
-                <div id="agentforgeCitationStage" class="agentforge-citation-stage"></div>
+                <div class="agentforge-citation-panel">
+                  <div id="agentforgeCitationPreview" class="agentforge-citation-preview d-none">
+                    <div class="agentforge-citation-preview-header">
+                      <h5 class="agentforge-citation-preview-title">{xlt t='Citation Preview'}</h5>
+                      <button type="button" class="btn btn-link btn-sm p-0" onclick="clearAgentForgeCitationPreview(); return false;">{xlt t='Close'}</button>
+                    </div>
+                    <div id="agentforgeCitationStatus" class="agentforge-citation-status"></div>
+                    <div id="agentforgeCitationStage" class="agentforge-citation-stage"></div>
+                  </div>
+                </div>
               </div>
-              <details class="agentforge-json-panel">
-                <summary>{xlt t='Raw extraction JSON'}</summary>
-                <pre id="agentforgeFactJson"></pre>
-              </details>
             </div>
             </div>
         </td>
@@ -935,6 +1383,10 @@ $('.btn-toggle').click(function() {
     $(this).find('.btn').toggleClass('btn-secondary');
     var show_prop = ($(this).find('.properties.active').length > 0 ? 'block':'none');
     $("#DocProperties").css('display', show_prop);
+});
+
+$(function () {
+    loadAgentForgeStoredFacts(docid, agentforgePatientId);
 });
 
 </script>

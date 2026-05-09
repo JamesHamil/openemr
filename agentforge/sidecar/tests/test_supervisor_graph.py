@@ -111,6 +111,15 @@ class SupervisorGraphTest(unittest.TestCase):
         self.assertEqual(trace.guideline_retrieval_hits, 0)
         self.assertEqual(response.debug_trace["guideline_retrieval"]["hits"], 0)
 
+    def test_extracted_lab_chat_skips_guideline_retrieval(self):
+        response, trace = handle_chat(_chat_request("what can you tell me about this patient's labs?"), Settings(mode="mock"))
+
+        self.assertEqual(trace.supervisor_route, "answer_direct_evidence")
+        self.assertEqual(trace.graph_nodes, ["supervisor", "answer_worker", "critic_verifier"])
+        self.assertNotIn("evidence-retriever", [handoff.worker for handoff in trace.worker_handoffs])
+        self.assertEqual(trace.guideline_retrieval_hits, 0)
+        self.assertEqual(response.debug_trace["guideline_retrieval"]["hits"], 0)
+
     def test_treatment_directive_stops_at_supervisor(self):
         response, trace = handle_chat(_chat_request("Should I start potassium treatment?"), Settings(mode="mock"))
 

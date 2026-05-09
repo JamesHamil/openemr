@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 ResponseStatus = Literal["verified", "partial", "refused", "failed"]
 AdapterStatusValue = Literal["success", "partial", "timeout", "unavailable", "failed"]
 SupportStatus = Literal["supported", "unsupported", "conflicting", "blocked"]
-DocumentType = Literal["lab_pdf", "intake_form"]
+DocumentType = Literal["lab_pdf", "intake_form", "medication_list"]
 ExtractionStatus = Literal["success", "partial", "failed"]
 
 

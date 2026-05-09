@@ -28,6 +28,8 @@ Return strict structured facts with citations. For PDF/image inputs, include nor
 bounding boxes only when the exact source region is visually identifiable. Use x, y, width, and height
 values from 0.0 to 1.0, plus an optional integer page. Otherwise leave bounding_box null and preserve
 page/section plus quote_or_value.
+For medication_list documents, extract each visible medication as a separate medication fact when possible,
+including name, dose, route, frequency, status, prescriber, and start/stop dates only when visible.
 Use low confidence and warnings for uncertain, missing, or unreadable fields."""
 
 CANONICAL_FIELD_LABELS = {
@@ -141,7 +143,12 @@ def _heuristic_extract(
     started: float,
 ) -> tuple[DocumentExtractionResponse, dict]:
     text = _decode_text_hint(request) or request.text_hint or request.filename
-    facts = _heuristic_lab_facts(request, text) if request.document_type == "lab_pdf" else _heuristic_intake_facts(request, text)
+    if request.document_type == "lab_pdf":
+        facts = _heuristic_lab_facts(request, text)
+    elif request.document_type == "medication_list":
+        facts = _heuristic_medication_list_facts(request, text)
+    else:
+        facts = _heuristic_intake_facts(request, text)
     warnings = []
     if not facts:
         warnings.append(
@@ -264,6 +271,92 @@ def _heuristic_intake_facts(request: DocumentExtractionRequest, text: str) -> li
     return facts
 
 
+def _heuristic_medication_list_facts(request: DocumentExtractionRequest, text: str) -> list[ExtractedFact]:
+    facts = []
+    medication_names = (
+        "albuterol",
+        "amlodipine",
+        "aspirin",
+        "atorvastatin",
+        "cetirizine",
+        "epinephrine",
+        "gabapentin",
+        "hydrochlorothiazide",
+        "insulin",
+        "levothyroxine",
+        "lisinopril",
+        "loratadine",
+        "metformin",
+        "omeprazole",
+        "prednisone",
+        "simvastatin",
+    )
+    dose_pattern = re.compile(
+        r"^\s*(?:[-*]\s*)?(?P<name>[A-Za-z][A-Za-z0-9 /-]{1,60}?)\s+"
+        r"(?P<dose>\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|mL|units?|iu|IU|%|tablet|tab|capsule|cap|puff)s?)\b"
+        r"(?P<rest>[^\n\r]*)",
+        flags=re.IGNORECASE,
+    )
+
+    for raw_line in re.split(r"[\n\r;]+", text):
+        line = raw_line.strip(" \t-*")
+        if not line:
+            continue
+        lower = line.lower()
+        match = dose_pattern.search(line)
+        has_known_name = any(name in lower for name in medication_names)
+        if not match and not (has_known_name and re.search(r"\d", line)):
+            continue
+
+        label = _medication_label_from_line(line, match, medication_names)
+        if not label:
+            continue
+        facts.append(
+            _fact(
+                request=request,
+                fact_type="medication",
+                label=label,
+                value=line,
+                unit="",
+                abnormal_flag="",
+                quote=line,
+                index=len(facts),
+                confidence=0.72 if match else 0.62,
+            )
+        )
+        if len(facts) >= 24:
+            break
+
+    if not facts and request.document_type == "medication_list":
+        facts.append(
+            _fact(
+                request=request,
+                fact_type="medication_document",
+                label="Uploaded medication list",
+                value="Medication list uploaded for clinician review",
+                unit="",
+                abnormal_flag="",
+                quote=request.filename,
+                index=0,
+                confidence=0.55,
+            )
+        )
+    return facts
+
+
+def _medication_label_from_line(line: str, match: re.Match | None, medication_names: tuple[str, ...]) -> str:
+    if match:
+        raw_name = re.sub(r"\b(?:active|current|medication|medications)\b", "", match.group("name"), flags=re.IGNORECASE)
+        raw_name = re.sub(r"\s+", " ", raw_name).strip(" :-")
+        if raw_name:
+            return raw_name.title()
+    lower = line.lower()
+    for name in medication_names:
+        if name in lower:
+            return name.title()
+    return ""
+
+
 def _fact(
     request: DocumentExtractionRequest,
     fact_type: str,
@@ -285,12 +378,20 @@ def _fact(
         citation=SourceCitation(
             source_type=request.document_type,
             source_id=request.source_id,
-            page_or_section="page 1" if request.document_type == "lab_pdf" else "intake form",
+            page_or_section=_default_page_or_section(request.document_type),
             field_or_chunk_id=f"{fact_type}-{index + 1}",
             quote_or_value=quote,
             bounding_box=None,
         ),
     )
+
+
+def _default_page_or_section(document_type: str) -> str:
+    if document_type == "lab_pdf":
+        return "page 1"
+    if document_type == "medication_list":
+        return "medication list"
+    return "intake form"
 
 
 def _normalize_fact(request: DocumentExtractionRequest, fact: ExtractedFact, index: int) -> ExtractedFact:

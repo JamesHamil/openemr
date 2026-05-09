@@ -16,12 +16,12 @@ class AgentForgeSidecarClient
 
     private function postJson(string $path, array $payload): array
     {
-        $sidecarUrl = rtrim((string)getenv('AGENTFORGE_SIDECAR_URL'), '/');
+        $sidecarUrl = rtrim($this->configValue('AGENTFORGE_SIDECAR_URL'), '/');
         if ($sidecarUrl === '') {
             return $this->fallbackResponse('AgentForge sidecar URL is not configured.');
         }
 
-        $secret = (string)getenv('AGENTFORGE_SIGNING_SECRET');
+        $secret = $this->configValue('AGENTFORGE_SIGNING_SECRET');
         if ($secret === '') {
             return $this->fallbackResponse('AgentForge signing secret is not configured.');
         }
@@ -83,8 +83,19 @@ class AgentForgeSidecarClient
 
     private function timeoutSeconds(): int
     {
-        $configured = (int)(getenv('AGENTFORGE_SIDECAR_TIMEOUT_SECONDS') ?: 75);
+        $configured = (int)($this->configValue('AGENTFORGE_SIDECAR_TIMEOUT_SECONDS') ?: 75);
         return max(15, min($configured, 120));
+    }
+
+    private function configValue(string $name): string
+    {
+        $value = getenv($name);
+        if (is_string($value) && $value !== '') {
+            return $value;
+        }
+
+        $serverValue = $_SERVER[$name] ?? '';
+        return is_string($serverValue) ? $serverValue : '';
     }
 
     private function sortRecursive(array &$value): void

@@ -59,8 +59,6 @@ def plan_evidence(request: AgentForgeRequest) -> EvidencePlan:
 
 def classify_question(message: str) -> AnswerFamily:
     normalized = " ".join(message.lower().split())
-    if any(term in normalized for term in ("medication reconciliation", "med rec", "reconciliation")):
-        return "med_reconciliation"
     if any(term in normalized for term in ("what changed", "changed since", "since last review")):
         return "change_since_review"
     if "missing" in normalized or "before making clinical decisions" in normalized:
@@ -110,6 +108,20 @@ def classify_question(message: str) -> AnswerFamily:
     if any(
         term in normalized
         for term in (
+            "medication reconciliation",
+            "med rec",
+            "reconciliation",
+            "current meds",
+            "current medications",
+            "what meds",
+            "which meds",
+            "medications",
+        )
+    ):
+        return "med_reconciliation"
+    if any(
+        term in normalized
+        for term in (
             "chart brief",
             "pre-round",
             "preround",
@@ -138,7 +150,7 @@ def _secondary_families(message: str, primary: AnswerFamily) -> tuple[AnswerFami
             secondary.append(family)
 
     add("oncology", ("oncolog", "cancer", "neoplasm", "malignant"))
-    add("med_reconciliation", ("current meds", "current medications", "meds", "medications", "medication list"))
+    add("med_reconciliation", ("current meds", "current medications", "meds", "medications"))
     add("allergies", ("allerg", "atopy", "reaction", "sensitivity", "anaphylaxis"))
     add("cardiac", ("ascvd", "cardiac", "heart", "cardiovascular", "bp", "blood pressure"))
     add("endocrine_metabolic", ("endocrine", "metabolic", "cardiometabolic", "diabetes", "prediabetes", "lipid"))
@@ -171,6 +183,8 @@ def _is_document_fact_question(normalized: str) -> bool:
         "uploaded pdf",
         "pdf",
         "form",
+        "medication list",
+        "med list",
         "paperwork",
     )
     if any(term in normalized for term in direct_terms):
@@ -208,6 +222,8 @@ def missing_required_adapters(request: AgentForgeRequest, plan: EvidencePlan | N
         if statuses.get(adapter) in {None, "success", "partial"}:
             continue
         if adapter == "labs" and _has_lab_document_evidence(request):
+            continue
+        if adapter == "medications" and _has_medication_document_evidence(request):
             continue
         missing.append(adapter)
     return missing
@@ -272,9 +288,10 @@ def _family_policy(
         return (
             ("medications",),
             ("medication_history",),
-            ("medication",),
+            ("medication", "document_fact"),
             (
                 "Distinguish current medication evidence from historical or legacy prescription evidence.",
+                "Use uploaded medication-list document facts when they are the selected medication evidence.",
                 "Ask the clinician to reconcile active versus legacy entries before relying on the list.",
             ),
         )
@@ -426,6 +443,7 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
         historical = [source for source in _by_type(sources, "medication") if source.metadata.get("status") == "historical"]
         add(_medications_matching(current, ("epinephrine", "auto-injector", "loratadine")), 4)
         add(current, 8)
+        add(_medication_document_fact_sources(sources), 8)
         add(historical, 6)
     elif family == "first_room":
         add(_by_type(sources, "problem"), 3)
@@ -518,6 +536,48 @@ def _has_lab_document_evidence(request: AgentForgeRequest) -> bool:
     )
 
 
+MEDICATION_DOCUMENT_FACT_TERMS = (
+    "medication",
+    "medications",
+    "med",
+    "meds",
+    "drug",
+    "dose",
+    "dosage",
+    "frequency",
+    "route",
+    "sig",
+    "prescriber",
+    "metformin",
+    "lisinopril",
+    "atorvastatin",
+    "amlodipine",
+    "insulin",
+)
+
+
+def _medication_document_fact_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    return [source for source in _by_type(sources, "document_fact") if _is_medication_document_fact(source)]
+
+
+def _is_medication_document_fact(source: EvidenceSource) -> bool:
+    if source.record_type != "document_fact":
+        return False
+    if _document_type(source) == "medication_list":
+        return True
+    if "medication" in source.field_path.lower():
+        return True
+    return _matches(source, MEDICATION_DOCUMENT_FACT_TERMS)
+
+
+def _has_medication_document_evidence(request: AgentForgeRequest) -> bool:
+    statuses = {status.adapter: status.status for status in request.evidence_bundle.adapter_status}
+    documents_available = statuses.get("agentforge_documents") in {None, "success", "partial"}
+    return documents_available and any(
+        _is_medication_document_fact(source) for source in request.evidence_bundle.sources
+    )
+
+
 def _medications_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> list[EvidenceSource]:
     return [source for source in _by_type(sources, "medication") if _matches(source, terms)]
 
@@ -528,7 +588,11 @@ def _document_fact_sources_for_message(request: AgentForgeRequest) -> list[Evide
     if not sources:
         return []
 
-    if "intake" in normalized or "form" in normalized:
+    if "medication list" in normalized or "med list" in normalized:
+        medication_list_sources = [source for source in sources if _document_type(source) == "medication_list"]
+        if medication_list_sources:
+            sources = medication_list_sources
+    elif "intake" in normalized or "form" in normalized:
         intake_sources = [source for source in sources if _document_type(source) in {"intake_form", ""}]
         if intake_sources:
             sources = intake_sources
@@ -548,6 +612,8 @@ def _document_fact_matches_message(source: EvidenceSource, normalized_message: s
         "date": ("date",),
         "address": ("address",),
         "email": ("email",),
+        "medication": ("medication", "med", "dose", "dosage", "frequency", "route", "prescriber"),
+        "med": ("medication", "med", "dose", "dosage", "frequency", "route", "prescriber"),
         "social": ("social", "alcohol", "tobacco", "recreational", "drug"),
         "alcohol": ("alcohol",),
         "recreational": ("recreational", "drug"),

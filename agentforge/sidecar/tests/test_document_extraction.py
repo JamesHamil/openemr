@@ -2,8 +2,9 @@ import base64
 from pathlib import Path
 import unittest
 
-from agentforge_sidecar.document_extraction import _normalize_bounding_box, _normalize_fact
+from agentforge_sidecar.document_extraction import _normalize_bounding_box, _normalize_fact, extract_document
 from agentforge_sidecar.schemas import DocumentExtractionRequest, ExtractedFact, SourceCitation
+from agentforge_sidecar.settings import Settings
 
 
 def _request() -> DocumentExtractionRequest:
@@ -91,13 +92,21 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         template = Path(__file__).resolve().parents[3] / "templates" / "documents" / "general_view.html"
         source = template.read_text()
 
+        self.assertIn('value="medication_list"', source)
+        self.assertIn("Medication List", source)
         self.assertIn("agentforgeCitationPreview", source)
         self.assertIn("hasAgentForgeBoundingBox", source)
         self.assertIn("hasAgentForgePreviewableCitation", source)
         self.assertIn("isAgentForgePdfDocument", source)
         self.assertIn("agentforgeDocumentName", source)
+        self.assertIn("agentforge-fact-workspace", source)
+        self.assertIn("document_facts.php", source)
+        self.assertIn("loadAgentForgeStoredFacts(docid, agentforgePatientId)", source)
+        self.assertIn("beginAgentForgeFactEdit", source)
+        self.assertIn("saveAgentForgeFacts", source)
+        self.assertIn("Re-extracting will replace any manual edits", source)
         self.assertIn("UI text-aligned highlight", source)
-        self.assertIn("renderAgentForgeCitationPreview(facts[firstPreviewableIndex]", source)
+        self.assertIn("renderAgentForgeCitationPreview(agentForgeCurrentFacts[firstPreviewableIndex]", source)
         self.assertIn("pdfjsLib.getDocument", source)
         self.assertIn("agentforge-preview-link", source)
 
@@ -115,6 +124,50 @@ class DocumentExtractionCitationTest(unittest.TestCase):
 
         self.assertIn("citation_json", source)
         self.assertIn("json_encode($citation", source)
+        self.assertIn("loadDocumentExtraction", source)
+        self.assertIn("saveEditedFacts", source)
+
+    def test_document_facts_endpoint_supports_load_and_save(self):
+        endpoint = (
+            Path(__file__).resolve().parents[3]
+            / "interface"
+            / "modules"
+            / "custom_modules"
+            / "agentforge"
+            / "public"
+            / "document_facts.php"
+        )
+        source = endpoint.read_text()
+
+        self.assertIn("action", source)
+        self.assertIn("'load'", source)
+        self.assertIn("'save'", source)
+        self.assertIn("saveEditedFacts", source)
+        self.assertIn("agentforge-document-facts-save", source)
+
+    def test_medication_list_mock_extraction_returns_medication_facts(self):
+        request = _request().model_copy(
+            update={
+                "document_type": "medication_list",
+                "filename": "medication-list.txt",
+                "mime_type": "text/plain",
+                "content_base64": base64.b64encode(
+                    b"Metformin 500 mg by mouth twice daily\nLisinopril 10 mg daily"
+                ).decode("ascii"),
+                "text_hint": "Metformin 500 mg by mouth twice daily\nLisinopril 10 mg daily",
+            }
+        )
+
+        response, trace = extract_document(request, Settings(mode="mock"))
+
+        self.assertEqual(response.document_type, "medication_list")
+        self.assertEqual(response.extraction_status, "success")
+        labels = [fact.label for fact in response.extracted_facts]
+        self.assertIn("Metformin", labels)
+        self.assertIn("Lisinopril", labels)
+        self.assertTrue(all(fact.fact_type == "medication" for fact in response.extracted_facts))
+        self.assertEqual(response.extracted_facts[0].citation.page_or_section, "medication list")
+        self.assertEqual(trace["mode"], "mock")
 
 
 if __name__ == "__main__":

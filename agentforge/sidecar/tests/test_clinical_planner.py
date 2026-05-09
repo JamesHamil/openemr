@@ -121,6 +121,73 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(plan.answer_family, "med_reconciliation")
         self.assertEqual(list(plan.selected_source_ids), ["medication-current", "medication-history"])
 
+    def test_medication_list_prompt_selects_uploaded_medication_list_facts(self):
+        request = _request(
+            "What is in the uploaded medication list?",
+            [
+                EvidenceSource(
+                    id="document-fact-med-1",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.medication",
+                    value="Metformin; Metformin 500 mg by mouth twice daily",
+                    metadata={"document_type": "medication_list"},
+                ),
+                EvidenceSource(
+                    id="document-fact-med-2",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:59Z",
+                    field_path="agentforge_extracted_facts.medication",
+                    value="Lisinopril; Lisinopril 10 mg daily",
+                    metadata={"document_type": "medication_list"},
+                ),
+                EvidenceSource(
+                    id="document-fact-intake",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:26:00Z",
+                    field_path="agentforge_extracted_facts.pharmacy",
+                    value="Preferred Pharmacy Name; MediMart",
+                    metadata={"document_type": "intake_form"},
+                ),
+            ],
+            [
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+                AdapterStatus(adapter="medications", status="unavailable", reason="No active medications found."),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "document_facts")
+        self.assertEqual(plan.answer_family, "document_facts")
+        self.assertEqual(list(plan.selected_source_ids), ["document-fact-med-2", "document-fact-med-1"])
+        self.assertEqual(missing_required_adapters(request, plan), [])
+
+    def test_general_medication_prompt_can_use_uploaded_medication_list_when_adapter_is_empty(self):
+        request = _request(
+            "What medications is this patient on?",
+            [
+                EvidenceSource(
+                    id="document-fact-med-1",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.medication",
+                    value="Metformin; Metformin 500 mg by mouth twice daily",
+                    metadata={"document_type": "medication_list"},
+                )
+            ],
+            [
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+                AdapterStatus(adapter="medications", status="unavailable", reason="No active medications found."),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "med_reconciliation")
+        self.assertEqual(list(plan.selected_source_ids), ["document-fact-med-1"])
+        self.assertEqual(missing_required_adapters(request, plan), [])
+
     def test_broad_brief_reserves_source_budget_across_categories(self):
         sources = [
             EvidenceSource(
@@ -331,6 +398,41 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(plan.answer_family, "document_facts")
         self.assertGreaterEqual(plan.confidence, 0.9)
         self.assertEqual(list(plan.selected_source_ids), ["document-fact-102", "document-fact-101"])
+
+    def test_lab_pdf_prompt_selects_extracted_lab_facts_without_lab_adapter(self):
+        request = _request(
+            "what can you tell me about this patient's labs?",
+            [
+                EvidenceSource(
+                    id="document-fact-364",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.lab_result",
+                    value="Lymphocytes; 67; unit %; range <1; abnormal High",
+                    metadata={"document_type": "lab_pdf"},
+                ),
+                EvidenceSource(
+                    id="document-fact-365",
+                    record_type="document_fact",
+                    recorded_at="2026-05-05T01:25:58Z",
+                    field_path="agentforge_extracted_facts.lab_result",
+                    value="Metamyelocytes; 1; unit %; range <1; abnormal High",
+                    metadata={"document_type": "lab_pdf"},
+                ),
+            ],
+            [
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+                AdapterStatus(adapter="labs", status="unavailable", reason="No recent lab results found."),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "labs")
+        self.assertEqual(plan.answer_family, "labs")
+        self.assertIn("document-fact-364", plan.selected_source_ids)
+        self.assertIn("document-fact-365", plan.selected_source_ids)
+        self.assertEqual(missing_required_adapters(request, plan), [])
 
     def test_ascvd_synonym_selects_cardiometabolic_risk_evidence(self):
         request = _request(
