@@ -15,6 +15,8 @@ from agentforge_sidecar.openai_provider import (
     _plan_needs_lab_augmentation,
     _RESPONSE_CACHE,
     _schema_lab_source_ids_for_plan,
+    _selected_source_limit,
+    _selected_sources,
     openai_response,
 )
 from agentforge_sidecar.schemas import (
@@ -568,6 +570,51 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual([source.id for source in response.sources], ["document-fact-med-2", "document-fact-med-1"])
         self.assertIn("Lisinopril: Lisinopril 10 mg daily", response.answer)
         self.assertIn("Metformin: Metformin 500 mg by mouth twice daily", response.answer)
+
+    def test_med_reconciliation_provider_keeps_complete_medication_list_selection(self):
+        request = _request().model_copy(update={"message": "What medications is this patient on?"})
+        document_sources = [
+            EvidenceSource(
+                id=f"document-fact-med-{index}",
+                record_type="document_fact",
+                recorded_at=f"2026-05-05T01:25:{index:02d}Z",
+                field_path="agentforge_extracted_facts.medication",
+                value=f"Medication {index}; {index} mg; 1 daily",
+                metadata={"document_type": "medication_list"},
+            )
+            for index in range(1, 17)
+        ]
+        chart_sources = [
+            EvidenceSource(
+                id=f"medication-rx-{index}",
+                record_type="medication",
+                recorded_at=f"2026-05-05T01:20:{index:02d}Z",
+                field_path="prescriptions.drug",
+                value=f"Chart Medication {index}",
+            )
+            for index in range(1, 4)
+        ]
+        request = request.model_copy(
+            update={
+                "evidence_bundle": request.evidence_bundle.model_copy(
+                    update={
+                        "sources": [*chart_sources, *document_sources],
+                        "adapter_status": [
+                            AdapterStatus(adapter="agentforge_documents", status="success"),
+                            AdapterStatus(adapter="medications", status="success"),
+                        ],
+                    }
+                )
+            }
+        )
+
+        plan = plan_evidence(request)
+        selected = _selected_sources(request, list(plan.selected_source_ids), _selected_source_limit(plan))
+
+        self.assertEqual(_selected_source_limit(plan), 24)
+        self.assertEqual(len(selected), 19)
+        self.assertTrue(all(source.id in {item.id for item in selected} for source in document_sources))
+        self.assertTrue(all(source.id in {item.id for item in selected} for source in chart_sources))
 
     def test_openai_response_intake_summary_skips_tool_phase_and_keeps_compose_payload_narrow(self):
         request = _request().model_copy(update={"message": "I need to know about this patient's intake form"})

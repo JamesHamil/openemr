@@ -88,6 +88,37 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertEqual(normalized.citation.field_or_chunk_id, "potassium")
         self.assertEqual(normalized.citation.quote_or_value, "Potassium 5.8 mmol/L")
 
+    def test_medication_list_image_facts_get_row_fallback_boxes(self):
+        request = _request().model_copy(
+            update={
+                "document_type": "medication_list",
+                "filename": "med-list.png",
+                "mime_type": "image/png",
+            }
+        )
+        fact = ExtractedFact(
+            fact_type="medication",
+            label="Aspirin",
+            value="81 mg; 1 daily",
+            confidence=0.6,
+            citation=SourceCitation(
+                source_type="medication_list",
+                source_id="openemr-document-7",
+                page_or_section="",
+                field_or_chunk_id="medication-2",
+                quote_or_value="aspirin 81 mg | 1 daily",
+                bounding_box=None,
+            ),
+        )
+
+        normalized = _normalize_fact(request, fact, 1)
+
+        box = normalized.citation.bounding_box or {}
+        self.assertEqual(normalized.citation.page_or_section, "medication list")
+        self.assertEqual(box.get("page"), 1)
+        self.assertGreater(float(box.get("width", 0)), 0.5)
+        self.assertGreater(float(box.get("height", 0)), 0)
+
     def test_document_viewer_contains_citation_preview_wiring(self):
         template = Path(__file__).resolve().parents[3] / "templates" / "documents" / "general_view.html"
         source = template.read_text()
@@ -98,6 +129,7 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("hasAgentForgeBoundingBox", source)
         self.assertIn("hasAgentForgePreviewableCitation", source)
         self.assertIn("isAgentForgePdfDocument", source)
+        self.assertIn("isAgentForgePdfDocument() && !isAgentForgeImageDocument()", source)
         self.assertIn("agentforgeDocumentName", source)
         self.assertIn("agentforge-fact-workspace", source)
         self.assertIn("document_facts.php", source)
@@ -105,6 +137,8 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("beginAgentForgeFactEdit", source)
         self.assertIn("saveAgentForgeFacts", source)
         self.assertIn("Re-extracting will replace any manual edits", source)
+        self.assertIn("preserved_existing_facts", source)
+        self.assertIn("AgentForge extraction could not complete; kept saved facts", source)
         self.assertIn("UI text-aligned highlight", source)
         self.assertIn("renderAgentForgeCitationPreview(agentForgeCurrentFacts[firstPreviewableIndex]", source)
         self.assertIn("pdfjsLib.getDocument", source)
@@ -126,6 +160,8 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("json_encode($citation", source)
         self.assertIn("loadDocumentExtraction", source)
         self.assertIn("saveEditedFacts", source)
+        self.assertIn("medicationListFallbackBoundingBox", source)
+        self.assertIn("$citation['bounding_box'] = $fallbackBox", source)
 
     def test_document_facts_endpoint_supports_load_and_save(self):
         endpoint = (
@@ -144,6 +180,33 @@ class DocumentExtractionCitationTest(unittest.TestCase):
         self.assertIn("'save'", source)
         self.assertIn("saveEditedFacts", source)
         self.assertIn("agentforge-document-facts-save", source)
+
+    def test_extract_endpoint_preserves_saved_facts_when_sidecar_is_unavailable(self):
+        endpoint = (
+            Path(__file__).resolve().parents[3]
+            / "interface"
+            / "modules"
+            / "custom_modules"
+            / "agentforge"
+            / "public"
+            / "extract_document.php"
+        )
+        source = endpoint.read_text()
+
+        self.assertIn("$previousPayload = $store->loadDocumentExtraction", source)
+        self.assertIn("agentforge_extract_fact_count($previousPayload) > 0", source)
+        self.assertIn("agentforge_extract_preserve_existing_payload", source)
+        self.assertIn("failed_preserved_existing_facts", source)
+        self.assertIn("preserved_existing_facts", source)
+        self.assertIn("saved facts were preserved", source)
+        self.assertLess(
+            source.index("$previousPayload = $store->loadDocumentExtraction"),
+            source.index("$client = new AgentForgeSidecarClient"),
+        )
+        self.assertLess(
+            source.index("$client = new AgentForgeSidecarClient"),
+            source.index("$agentforgeDocumentId = $store->createDocumentRecord"),
+        )
 
     def test_medication_list_mock_extraction_returns_medication_facts(self):
         request = _request().model_copy(

@@ -417,28 +417,28 @@ function collectAgentForgeEditedFacts() {
 function loadAgentForgeStoredFacts(docid, patientId) {
     let status = $('#agentforgeExtractStatus');
     let data = agentForgePostData('load', docid, patientId);
-    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Loading saved AgentForge facts...'});
+    status.removeClass('text-danger text-success text-warning').addClass('text-muted').text({xlj t='Loading saved AgentForge facts...'});
 
     fetch(agentForgeDocumentFactsEndpoint(), agentForgeFetchOptions(data)).then(function (response) {
         return response.json();
     }).then(function (payload) {
         if (payload.error) {
-            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='Unable to load saved AgentForge facts.'});
+            status.removeClass('text-muted text-success text-warning').addClass('text-danger').text(payload.message || {xlj t='Unable to load saved AgentForge facts.'});
             return;
         }
         if (payload.empty) {
             agentForgeSavedFactsAvailable = false;
             updateAgentForgeFactControls();
-            status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='No saved AgentForge facts yet.'});
+            status.removeClass('text-danger text-success text-warning').addClass('text-muted').text({xlj t='No saved AgentForge facts yet.'});
             return;
         }
         renderAgentForgeExtractionPreview(payload);
         let facts = (payload.extraction && payload.extraction.extracted_facts) || [];
-        status.removeClass('text-muted text-danger').addClass('text-success').text(
+        status.removeClass('text-muted text-danger text-warning').addClass('text-success').text(
             {xlj t='Loaded saved AgentForge facts:'} + ' ' + facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
         );
     }).catch(function () {
-        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='Unable to load saved AgentForge facts.'});
+        status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='Unable to load saved AgentForge facts.'});
     });
 }
 
@@ -460,22 +460,22 @@ function saveAgentForgeFacts(docid, patientId) {
     data.set('facts_json', JSON.stringify(facts));
 
     button.prop('disabled', true);
-    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Saving AgentForge facts...'});
+    status.removeClass('text-danger text-success text-warning').addClass('text-muted').text({xlj t='Saving AgentForge facts...'});
 
     fetch(agentForgeDocumentFactsEndpoint(), agentForgeFetchOptions(data)).then(function (response) {
         return response.json();
     }).then(function (payload) {
         if (payload.error) {
-            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='Unable to save AgentForge facts.'});
+            status.removeClass('text-muted text-success text-warning').addClass('text-danger').text(payload.message || {xlj t='Unable to save AgentForge facts.'});
             return;
         }
         renderAgentForgeExtractionPreview(payload);
         let savedFacts = (payload.extraction && payload.extraction.extracted_facts) || [];
-        status.removeClass('text-muted text-danger').addClass('text-success').text(
+        status.removeClass('text-muted text-danger text-warning').addClass('text-success').text(
             {xlj t='Saved AgentForge facts:'} + ' ' + savedFacts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
         );
     }).catch(function () {
-        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='Unable to save AgentForge facts.'});
+        status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='Unable to save AgentForge facts.'});
     }).finally(function () {
         button.prop('disabled', false);
     });
@@ -558,7 +558,7 @@ function hasAgentForgePreviewableCitation(fact) {
     if (hasAgentForgeBoundingBox(citation)) {
         return true;
     }
-    if (!isAgentForgePdfDocument()) {
+    if (!isAgentForgePdfDocument() && !isAgentForgeImageDocument()) {
         return false;
     }
     return Boolean(citation.quote_or_value || fact.value || citation.page_or_section);
@@ -776,7 +776,7 @@ function extractWithAgentForge(docid, patientId) {
 
     button.prop('disabled', true);
     agentForgeFactEditMode = false;
-    status.removeClass('text-danger text-success').addClass('text-muted').text({xlj t='Extracting document evidence...'});
+    status.removeClass('text-danger text-success text-warning').addClass('text-muted').text({xlj t='Extracting document evidence...'});
     clearAgentForgeExtractionPreview();
 
     let requestOptions = new Object();
@@ -789,21 +789,29 @@ function extractWithAgentForge(docid, patientId) {
         return response.json();
     }).then(function (payload) {
         if (payload.error) {
-            status.removeClass('text-muted text-success').addClass('text-danger').text(payload.message || {xlj t='AgentForge extraction failed.'});
+            status.removeClass('text-muted text-success text-warning').addClass('text-danger').text(payload.message || {xlj t='AgentForge extraction failed.'});
             return;
         }
         renderAgentForgeExtractionPreview(payload);
         let extraction = payload.extraction || {};
         let facts = extraction.extracted_facts || [];
         let traceId = extraction.trace_id || '';
+        if (payload.preserved_existing_facts) {
+            let attempt = payload.extraction_attempt || {};
+            status.removeClass('text-muted text-danger text-success').addClass('text-warning').text(
+                {xlj t='AgentForge extraction could not complete; kept saved facts:'} + ' ' +
+                facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} + ' ' + (attempt.trace_id || traceId)
+            );
+            return;
+        }
         let extractionStatus = extraction.extraction_status || 'unknown';
         let statusClass = extractionStatus === 'failed' ? 'text-danger' : 'text-success';
-        status.removeClass('text-muted text-danger text-success').addClass(statusClass).text(
+        status.removeClass('text-muted text-danger text-success text-warning').addClass(statusClass).text(
             {xlj t='AgentForge extraction'} + ' ' + (extraction.extraction_status || 'unknown') + ': ' +
             facts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} + ' ' + traceId
         );
     }).catch(function () {
-        status.removeClass('text-muted text-success').addClass('text-danger').text({xlj t='AgentForge extraction failed before a response was returned.'});
+        status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='AgentForge extraction failed before a response was returned.'});
     }).finally(function () {
         button.prop('disabled', false);
     });

@@ -92,6 +92,37 @@ def _intake_chat_request(message: str) -> AgentForgeRequest:
     )
 
 
+def _medication_list_chat_request(message: str) -> AgentForgeRequest:
+    return AgentForgeRequest(
+        schema_version="agentforge.request.v1",
+        request_id="graph-chat-medications",
+        conversation_id="graph-conversation",
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        purpose="unit-test",
+        scope=_scope("medications"),
+        message=message,
+        evidence_bundle=RoundingContextBundle(
+            id="bundle-graph-medications",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            patient_context=PatientContext(patient_id="1", encounter_id="2"),
+            sources=[
+                EvidenceSource(
+                    id="document-fact-med-1",
+                    record_type="document_fact",
+                    recorded_at=datetime.now(timezone.utc).isoformat(),
+                    field_path="agentforge_extracted_facts.medication",
+                    value="Metformin; 500 mg; twice daily",
+                    metadata={"source_kind": "document_extraction", "document_type": "medication_list"},
+                )
+            ],
+            adapter_status=[
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+                AdapterStatus(adapter="medications", status="unavailable", reason="No active medications found."),
+            ],
+        ),
+    )
+
+
 class SupervisorGraphTest(unittest.TestCase):
     def test_chat_graph_records_supervisor_worker_and_guideline_metadata(self):
         response, trace = handle_chat(_chat_request("What should I review for this abnormal potassium?"), Settings(mode="mock"))
@@ -113,6 +144,18 @@ class SupervisorGraphTest(unittest.TestCase):
 
     def test_extracted_lab_chat_skips_guideline_retrieval(self):
         response, trace = handle_chat(_chat_request("what can you tell me about this patient's labs?"), Settings(mode="mock"))
+
+        self.assertEqual(trace.supervisor_route, "answer_direct_evidence")
+        self.assertEqual(trace.graph_nodes, ["supervisor", "answer_worker", "critic_verifier"])
+        self.assertNotIn("evidence-retriever", [handoff.worker for handoff in trace.worker_handoffs])
+        self.assertEqual(trace.guideline_retrieval_hits, 0)
+        self.assertEqual(response.debug_trace["guideline_retrieval"]["hits"], 0)
+
+    def test_uploaded_medication_list_chat_skips_guideline_retrieval(self):
+        response, trace = handle_chat(
+            _medication_list_chat_request("what medications is this patient on?"),
+            Settings(mode="mock"),
+        )
 
         self.assertEqual(trace.supervisor_route, "answer_direct_evidence")
         self.assertEqual(trace.graph_nodes, ["supervisor", "answer_worker", "critic_verifier"])

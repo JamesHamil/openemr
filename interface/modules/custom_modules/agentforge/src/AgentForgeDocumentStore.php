@@ -150,7 +150,20 @@ class AgentForgeDocumentStore
             [(int)$document['id']]
         );
         while ($row = sqlFetchArray($result)) {
+            $factIndex = count($facts);
             $citation = json_decode((string)$row['citation_json'], true);
+            if (is_array($citation)) {
+                $fallbackBox = $this->medicationListFallbackBoundingBox(
+                    (string)$document['document_type'],
+                    (string)$document['mime_type'],
+                    $citation,
+                    (string)$row['fact_type'],
+                    $factIndex
+                );
+                if ($fallbackBox !== null) {
+                    $citation['bounding_box'] = $fallbackBox;
+                }
+            }
             $facts[] = [
                 'id' => (string)$row['id'],
                 'fact_type' => (string)$row['fact_type'],
@@ -328,6 +341,31 @@ class AgentForgeDocumentStore
         }
 
         return $normalized;
+    }
+
+    private function medicationListFallbackBoundingBox(
+        string $documentType,
+        string $mimeType,
+        array $citation,
+        string $factType,
+        int $index
+    ): ?array {
+        if ($documentType !== 'medication_list' || strpos(strtolower($mimeType), 'image/') !== 0) {
+            return null;
+        }
+        if (isset($citation['bounding_box']) && is_array($citation['bounding_box'])) {
+            return null;
+        }
+        if (!in_array($factType, ['medication', 'medication_document'], true)) {
+            return null;
+        }
+        return [
+            'x' => 0.06,
+            'y' => min(0.9, 0.17 + ($index * 0.046)),
+            'width' => 0.88,
+            'height' => 0.042,
+            'page' => 1,
+        ];
     }
 
     public function recentFactSources(string $pid, int $limit = 12, string $message = ''): array

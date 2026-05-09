@@ -72,6 +72,10 @@ LAB_DOCUMENT_FACT_TERMS = (
 )
 
 
+DEFAULT_SELECTED_SOURCE_LIMIT = 10
+COMPLETE_MEDICATION_LIST_SOURCE_LIMIT = 24
+
+
 COMPOSE_PROMPT = """You are AgentForge Clinical Co-Pilot for a hospitalist preparing for rounds.
 Use only the selected evidence provided in this request payload. Never provide treatment directives,
 orders, diagnoses, or medication changes. Every factual clinical claim must cite source_ids from selected evidence.
@@ -80,6 +84,8 @@ You will receive an evidence_plan with an answer_family and clinical rubric. Use
 not as a canned template. Write naturally for a physician. Do not copy the rubric wording unless it fits the answer.
 
 Keep the answer concise and physician-natural: <=180 words, <=8 claims, <=10 displayed sources.
+Exception: for med_reconciliation questions that include selected medication_list document facts, include every selected
+medication_list medication fact, even when that requires slightly more than 180 words and up to 24 claims/displayed sources.
 Start answer with a direct natural-language response to the specific question.
 Avoid unrelated chart inventory unless directly needed for the question.
 Do not mark the response partial just because unrelated data is absent; partial is for relevant missing evidence, failed citations, or incomplete answers.
@@ -221,7 +227,11 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 },
             ) as tool_observation:
                 tool_plan, tool_diag = run_tool_phase(client, request, model, settings.reasoning)
-                selected_source_ids = _merge_source_ids(evidence_plan.selected_source_ids, tool_plan.selected_source_ids)
+                selected_source_ids = _merge_source_ids(
+                    evidence_plan.selected_source_ids,
+                    tool_plan.selected_source_ids,
+                    limit=_selected_source_limit(evidence_plan),
+                )
                 update_generation_observation(
                     tool_observation,
                     settings,
@@ -243,7 +253,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                         "source_selection_mode": source_selection_mode,
                     },
                 )
-        selected_sources = _selected_sources(request, selected_source_ids)
+        selected_sources = _selected_sources(request, selected_source_ids, _selected_source_limit(evidence_plan))
         selected_source_ids, selected_sources, schema_expansion = _apply_schema_evidence_expansion(
             request,
             evidence_plan,
@@ -697,7 +707,7 @@ def _apply_schema_evidence_expansion(
     added_source_ids = [source_id for source_id in expansion_source_ids if source_id not in selected_source_ids]
     if prefer_exact_group:
         expanded_source_ids = _merge_source_ids(expansion_source_ids)
-        expanded_sources = _selected_sources(request, expanded_source_ids)
+        expanded_sources = _selected_sources(request, expanded_source_ids, _selected_source_limit(evidence_plan))
         return (
             expanded_source_ids,
             expanded_sources,
@@ -727,7 +737,7 @@ def _apply_schema_evidence_expansion(
         )
 
     expanded_source_ids = _merge_source_ids(expansion_source_ids, selected_source_ids)
-    expanded_sources = _selected_sources(request, expanded_source_ids)
+    expanded_sources = _selected_sources(request, expanded_source_ids, _selected_source_limit(evidence_plan))
     return (
         expanded_source_ids,
         expanded_sources,
@@ -1425,7 +1435,11 @@ def _repair_response(
         return None
 
 
-def _selected_sources(request: AgentForgeRequest, source_ids: list[str] | tuple[str, ...]):
+def _selected_sources(
+    request: AgentForgeRequest,
+    source_ids: list[str] | tuple[str, ...],
+    limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
+):
     source_by_id = {source.id: source for source in request.evidence_bundle.sources}
     selected = []
     for source_id in source_ids:
@@ -1435,7 +1449,7 @@ def _selected_sources(request: AgentForgeRequest, source_ids: list[str] | tuple[
         if any(existing.id == source.id for existing in selected):
             continue
         selected.append(source)
-        if len(selected) >= 10:
+        if len(selected) >= limit:
             break
     return selected
 
@@ -1464,15 +1478,28 @@ def _model_response_to_agent_response(response: ModelAgentForgeResponse, trace_i
     )
 
 
-def _merge_source_ids(*source_id_groups: list[str] | tuple[str, ...]) -> list[str]:
+def _merge_source_ids(
+    *source_id_groups: list[str] | tuple[str, ...],
+    limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
+) -> list[str]:
     merged: list[str] = []
     for source_ids in source_id_groups:
         for source_id in source_ids:
             if source_id not in merged:
                 merged.append(source_id)
-            if len(merged) >= 10:
+            if len(merged) >= limit:
                 return merged
     return merged
+
+
+def _selected_source_limit(evidence_plan: EvidencePlan) -> int:
+    if evidence_plan.answer_family in {"med_reconciliation", "document_facts"}:
+        if any(
+            "document-fact" in source_id
+            for source_id in evidence_plan.selected_source_ids
+        ):
+            return COMPLETE_MEDICATION_LIST_SOURCE_LIMIT
+    return DEFAULT_SELECTED_SOURCE_LIMIT
 
 
 def _plan_payload(plan: EvidencePlan) -> dict:

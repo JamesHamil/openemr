@@ -395,7 +395,10 @@ def _default_page_or_section(document_type: str) -> str:
 
 
 def _normalize_fact(request: DocumentExtractionRequest, fact: ExtractedFact, index: int) -> ExtractedFact:
-    page_or_section = fact.citation.page_or_section
+    page_or_section = fact.citation.page_or_section or _default_page_or_section(request.document_type)
+    bounding_box = _normalize_bounding_box(fact.citation.bounding_box, page_or_section)
+    if bounding_box is None:
+        bounding_box = _fallback_bounding_box(request, fact, index)
     citation = fact.citation.model_copy(
         update={
             "source_type": fact.citation.source_type or request.document_type,
@@ -403,11 +406,24 @@ def _normalize_fact(request: DocumentExtractionRequest, fact: ExtractedFact, ind
             "page_or_section": page_or_section,
             "field_or_chunk_id": fact.citation.field_or_chunk_id or f"{fact.fact_type}-{index + 1}",
             "quote_or_value": fact.citation.quote_or_value or fact.value,
-            "bounding_box": _normalize_bounding_box(fact.citation.bounding_box, page_or_section),
+            "bounding_box": bounding_box,
         }
     )
     label = CANONICAL_FIELD_LABELS.get(citation.field_or_chunk_id.strip().lower(), fact.label)
     return fact.model_copy(update={"citation": citation, "label": label})
+
+
+def _fallback_bounding_box(
+    request: DocumentExtractionRequest,
+    fact: ExtractedFact,
+    index: int,
+) -> dict[str, float | int] | None:
+    if request.document_type != "medication_list" or not request.mime_type.startswith("image/"):
+        return None
+    if fact.fact_type not in {"medication", "medication_document"}:
+        return None
+    y = min(0.9, 0.17 + (index * 0.046))
+    return {"x": 0.06, "y": y, "width": 0.88, "height": 0.042, "page": 1}
 
 
 def _normalize_bounding_box(box: dict[str, float | int] | None, page_or_section: str = "") -> dict[str, float | int] | None:

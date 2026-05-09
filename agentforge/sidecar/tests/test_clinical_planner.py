@@ -188,6 +188,44 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(list(plan.selected_source_ids), ["document-fact-med-1"])
         self.assertEqual(missing_required_adapters(request, plan), [])
 
+    def test_general_medication_prompt_keeps_complete_uploaded_medication_list(self):
+        document_sources = [
+            EvidenceSource(
+                id=f"document-fact-med-{index}",
+                record_type="document_fact",
+                recorded_at=f"2026-05-05T01:25:{index:02d}Z",
+                field_path="agentforge_extracted_facts.medication",
+                value=f"Medication {index}; {index} mg; 1 daily",
+                metadata={"document_type": "medication_list"},
+            )
+            for index in range(1, 17)
+        ]
+        chart_sources = [
+            EvidenceSource(
+                id=f"medication-rx-{index}",
+                record_type="medication",
+                recorded_at=f"2026-05-05T01:20:{index:02d}Z",
+                field_path="prescriptions.drug",
+                value=f"Chart Medication {index}",
+            )
+            for index in range(1, 4)
+        ]
+        request = _request(
+            "What medications is this patient on?",
+            [*chart_sources, *document_sources],
+            [
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+                AdapterStatus(adapter="medications", status="success"),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(plan.answer_family, "med_reconciliation")
+        self.assertEqual(len(plan.selected_source_ids), 19)
+        self.assertTrue(all(source.id in plan.selected_source_ids for source in document_sources))
+        self.assertTrue(all(source.id in plan.selected_source_ids for source in chart_sources))
+
     def test_broad_brief_reserves_source_budget_across_categories(self):
         sources = [
             EvidenceSource(

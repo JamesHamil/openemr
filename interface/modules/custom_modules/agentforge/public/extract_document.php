@@ -87,15 +87,7 @@ try {
     $hash = hash('sha256', $content);
     $encounterId = ctype_digit((string)($_POST['encounter_id'] ?? '')) ? (string)$_POST['encounter_id'] : (string)agentforge_session_get($session, 'encounter', '');
     $store = new AgentForgeDocumentStore();
-    $agentforgeDocumentId = $store->createDocumentRecord(
-        $requestPid,
-        $encounterId,
-        $openEmrDocumentId,
-        $documentType,
-        $filename,
-        $mimeType,
-        $hash
-    );
+    $previousPayload = $store->loadDocumentExtraction($requestPid, $openEmrDocumentId, $documentType);
 
     $client = new AgentForgeSidecarClient();
     $extraction = $client->extractDocument(agentforge_build_extraction_request(
@@ -109,21 +101,56 @@ try {
         $content
     ));
     if (empty($extraction['extraction_status'])) {
-        $extraction = [
-            'schema_version' => 'agentforge.document_extract.response.v1',
-            'document_type' => $documentType,
-            'extraction_status' => 'failed',
-            'extracted_facts' => [],
-            'warnings' => [
-                [
-                    'code' => 'sidecar_extraction_unavailable',
-                    'message' => $extraction['answer'] ?? 'AgentForge sidecar did not return a document extraction response.',
-                ],
+        $failure = agentforge_extract_unavailable_payload($documentType, $extraction);
+        if ($previousPayload !== null && agentforge_extract_fact_count($previousPayload) > 0) {
+            $preservedPayload = agentforge_extract_preserve_existing_payload(
+                $previousPayload,
+                $failure,
+                $store->recentDocuments($requestPid)
+            );
+            EventAuditLogger::getInstance()->newEvent(
+                'agentforge-document-extract',
+                (string)agentforge_session_get($session, 'authUser', ''),
+                (string)agentforge_session_get($session, 'authProvider', ''),
+                0,
+                'document_id=' . $openEmrDocumentId . ' status=failed_preserved_existing_facts trace_id=' .
+                ($failure['trace_id'] ?? 'missing') . ' fact_count=' . agentforge_extract_fact_count($preservedPayload),
+                $requestPid
+            );
+            agentforge_extract_json($preservedPayload);
+        }
+
+        EventAuditLogger::getInstance()->newEvent(
+            'agentforge-document-extract',
+            (string)agentforge_session_get($session, 'authUser', ''),
+            (string)agentforge_session_get($session, 'authProvider', ''),
+            0,
+            'document_id=' . $openEmrDocumentId . ' status=failed trace_id=' . ($failure['trace_id'] ?? 'missing'),
+            $requestPid
+        );
+        agentforge_extract_json([
+            'document' => [
+                'agentforge_document_id' => 0,
+                'openemr_document_id' => $openEmrDocumentId,
+                'document_type' => $documentType,
+                'filename' => $filename,
+                'mime_type' => $mimeType,
+                'file_hash' => $hash,
             ],
-            'worker_handoffs' => [],
-            'trace_id' => $extraction['trace_id'] ?? 'extract-unavailable-' . bin2hex(random_bytes(4)),
-        ];
+            'extraction' => $failure,
+            'recent_documents' => $store->recentDocuments($requestPid),
+        ]);
     }
+
+    $agentforgeDocumentId = $store->createDocumentRecord(
+        $requestPid,
+        $encounterId,
+        $openEmrDocumentId,
+        $documentType,
+        $filename,
+        $mimeType,
+        $hash
+    );
     $store->replaceFacts($agentforgeDocumentId, $requestPid, $openEmrDocumentId, $extraction);
 
     EventAuditLogger::getInstance()->newEvent(
@@ -196,6 +223,49 @@ function agentforge_extract_error(string $message, string $code): array
             ],
         ],
     ];
+}
+
+function agentforge_extract_unavailable_payload(string $documentType, array $sidecarResponse): array
+{
+    return [
+        'schema_version' => 'agentforge.document_extract.response.v1',
+        'document_type' => $documentType,
+        'extraction_status' => 'failed',
+        'extracted_facts' => [],
+        'warnings' => [
+            [
+                'code' => 'sidecar_extraction_unavailable',
+                'message' => $sidecarResponse['answer'] ?? 'AgentForge sidecar did not return a document extraction response.',
+            ],
+        ],
+        'worker_handoffs' => [],
+        'trace_id' => $sidecarResponse['trace_id'] ?? 'extract-unavailable-' . bin2hex(random_bytes(4)),
+    ];
+}
+
+function agentforge_extract_preserve_existing_payload(array $payload, array $failure, array $recentDocuments): array
+{
+    if (!isset($payload['extraction']) || !is_array($payload['extraction'])) {
+        $payload['extraction'] = [];
+    }
+    if (!isset($payload['extraction']['warnings']) || !is_array($payload['extraction']['warnings'])) {
+        $payload['extraction']['warnings'] = [];
+    }
+    $payload['extraction']['warnings'][] = [
+        'code' => 'sidecar_extraction_unavailable',
+        'message' => 'AgentForge extraction failed before new facts were returned; saved facts were preserved.',
+        'trace_id' => $failure['trace_id'] ?? '',
+    ];
+    $payload['preserved_existing_facts'] = true;
+    $payload['extraction_attempt'] = $failure;
+    $payload['recent_documents'] = $recentDocuments;
+    return $payload;
+}
+
+function agentforge_extract_fact_count(array $payload): int
+{
+    $facts = $payload['extraction']['extracted_facts'] ?? [];
+    return is_array($facts) ? count($facts) : 0;
 }
 
 function agentforge_extract_json(array $payload, int $status = 200): void

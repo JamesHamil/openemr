@@ -23,6 +23,9 @@ AnswerFamily = Literal[
     "long_tail",
 ]
 
+DEFAULT_SELECTED_SOURCE_LIMIT = 12
+COMPLETE_MEDICATION_LIST_SOURCE_LIMIT = 24
+
 
 @dataclass(frozen=True)
 class EvidencePlan:
@@ -398,16 +401,21 @@ def _select_sources(
     request: AgentForgeRequest, family: AnswerFamily, secondary_families: tuple[AnswerFamily, ...] = ()
 ) -> list[EvidenceSource]:
     selected: list[EvidenceSource] = []
+    limit = _selected_source_limit(request, family, secondary_families)
     for item in (family, *secondary_families):
-        for source in _select_sources_for_family(request, item):
+        for source in _select_sources_for_family(request, item, limit):
             if source.id not in {existing.id for existing in selected}:
                 selected.append(source)
-            if len(selected) >= 12:
+            if len(selected) >= limit:
                 return selected
     return selected
 
 
-def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily) -> list[EvidenceSource]:
+def _select_sources_for_family(
+    request: AgentForgeRequest,
+    family: AnswerFamily,
+    selected_source_limit: int = DEFAULT_SELECTED_SOURCE_LIMIT,
+) -> list[EvidenceSource]:
     sources = request.evidence_bundle.sources
     selected: list[EvidenceSource] = []
 
@@ -443,7 +451,7 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
         historical = [source for source in _by_type(sources, "medication") if source.metadata.get("status") == "historical"]
         add(_medications_matching(current, ("epinephrine", "auto-injector", "loratadine")), 4)
         add(current, 8)
-        add(_medication_document_fact_sources(sources), 8)
+        add(_medication_document_fact_sources(sources), COMPLETE_MEDICATION_LIST_SOURCE_LIMIT)
         add(historical, 6)
     elif family == "first_room":
         add(_by_type(sources, "problem"), 3)
@@ -459,7 +467,7 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
         add(_by_type(sources, "lab"), 8)
         add(_lab_document_fact_sources(sources), 8)
     elif family == "document_facts":
-        add(_document_fact_sources_for_message(request), 10)
+        add(_document_fact_sources_for_message(request), selected_source_limit)
         if _asks_patient_identity(request.message):
             add(_by_type(sources, "demographic"), 3)
     elif family == "broad_brief":
@@ -475,7 +483,23 @@ def _select_sources_for_family(request: AgentForgeRequest, family: AnswerFamily)
     else:
         add(sources, 10)
 
-    return selected[:12]
+    return selected[:selected_source_limit]
+
+
+def _selected_source_limit(
+    request: AgentForgeRequest,
+    family: AnswerFamily,
+    secondary_families: tuple[AnswerFamily, ...] = (),
+) -> int:
+    families = (family, *secondary_families)
+    if any(item in {"med_reconciliation", "document_facts"} for item in families):
+        if _has_medication_list_document_sources(request.evidence_bundle.sources):
+            return COMPLETE_MEDICATION_LIST_SOURCE_LIMIT
+    return DEFAULT_SELECTED_SOURCE_LIMIT
+
+
+def _has_medication_list_document_sources(sources: list[EvidenceSource]) -> bool:
+    return any(_document_type(source) == "medication_list" for source in sources if source.record_type == "document_fact")
 
 
 def _by_type(sources: list[EvidenceSource], record_type: str) -> list[EvidenceSource]:

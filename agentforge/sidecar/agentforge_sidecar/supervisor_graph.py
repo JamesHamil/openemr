@@ -280,7 +280,22 @@ def _initial_chat_route(request: AgentForgeRequest) -> str:
         return "answer_document_facts"
     if plan.answer_family == "labs":
         return "answer_direct_evidence"
+    if plan.answer_family == "med_reconciliation" and _plan_selected_medication_document_facts(request, plan.selected_source_ids):
+        return "answer_direct_evidence"
     return "retrieve_then_answer"
+
+
+def _plan_selected_medication_document_facts(
+    request: AgentForgeRequest,
+    selected_source_ids: tuple[str, ...],
+) -> bool:
+    selected = set(selected_source_ids)
+    for source in request.evidence_bundle.sources:
+        if source.id not in selected or source.record_type != "document_fact":
+            continue
+        if source.metadata.get("document_type") == "medication_list":
+            return True
+    return False
 
 
 def _evidence_retriever(state: ChatGraphState) -> dict:
