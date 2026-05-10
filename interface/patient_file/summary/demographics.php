@@ -40,7 +40,6 @@ require_once(__DIR__ . "/../../../library/appointments.inc.php");
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Session\SessionUtil;
-use OpenEMR\Common\Session\SessionWrapperFactory;
 use OpenEMR\Common\Twig\TwigContainer;
 use OpenEMR\Core\Header;
 use OpenEMR\Core\OEGlobalsBag;
@@ -62,14 +61,26 @@ use OpenEMR\Reminder\BirthdayReminder;
 use OpenEMR\Services\AllergyIntoleranceService;
 use OpenEMR\Services\PatientIssuesService;
 use OpenEMR\Services\PatientService;
-use Symfony\Component\EventDispatcher\EventDispatcher;
-
 $session = new class {
     public function get(string $key)
     {
         return $_SESSION[$key] ?? null;
     }
 };
+$agentforgeGlobals = OEGlobalsBag::getInstance();
+$agentforgeKernel = null;
+$agentforgeEventDispatcher = null;
+if (method_exists($agentforgeGlobals, 'getKernel')) {
+    try {
+        $agentforgeKernel = $agentforgeGlobals->getKernel();
+        if (is_object($agentforgeKernel) && method_exists($agentforgeKernel, 'getEventDispatcher')) {
+            $agentforgeEventDispatcher = $agentforgeKernel->getEventDispatcher();
+        }
+    } catch (\Throwable $exception) {
+        $agentforgeKernel = null;
+        $agentforgeEventDispatcher = null;
+    }
+}
 
 if (!isset($pid)) {
     $pid = $session->get('pid') ?? $_GET['pid'] ?? null;
@@ -79,7 +90,12 @@ if (!isset($pid)) {
 // This is set in new.php so we can prevent new previous name from being added i.e no pid available.
 SessionUtil::setSession('disablePreviousNameAdds', 0);
 
-$twig = new TwigContainer(null, OEGlobalsBag::getInstance()->getKernel());
+$twig = null;
+try {
+    $twig = $agentforgeKernel !== null ? new TwigContainer(null, $agentforgeKernel) : new TwigContainer();
+} catch (\Throwable $exception) {
+    $twig = null;
+}
 
 // Set session for pid (via setpid). Also set session for encounter (if applicable)
 if (isset($_GET['set_pid'])) {
@@ -97,14 +113,13 @@ if (isset($_GET['set_pid'])) {
 // Note: it would eventually be a good idea to move this into
 // it's own module that people can remove / add if they don't
 // want smart support in their system.
-$smartLaunchController = new SMARTLaunchController(OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher());
-$smartLaunchController->registerContextEvents();
+if ($agentforgeEventDispatcher !== null) {
+    $smartLaunchController = new SMARTLaunchController($agentforgeEventDispatcher);
+    $smartLaunchController->registerContextEvents();
+}
 $hiddenCards = getHiddenDashboardCards();
 
-/**
- * @var EventDispatcher
- */
-$ed = OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher();
+$ed = $agentforgeEventDispatcher;
 
 $active_reminders = false;
 $all_allergy_alerts = false;
@@ -172,6 +187,36 @@ function agentforgeModernDashboardArray($value): array
     return is_array($value) ? $value : [];
 }
 
+function agentforgeDashboardCsrfToken(): string
+{
+    $privateKey = $_SESSION['csrf_private_key'] ?? null;
+    if ($privateKey !== null && $privateKey !== '') {
+        return substr(hash_hmac('sha256', 'default', (string)$privateKey), 0, 40);
+    }
+
+    try {
+        if (!class_exists(\OpenEMR\Common\Session\SessionWrapperFactory::class)) {
+            return '';
+        }
+
+        $factory = \OpenEMR\Common\Session\SessionWrapperFactory::getInstance();
+        foreach (['getActiveSession', 'getSession'] as $method) {
+            if (!method_exists($factory, $method)) {
+                continue;
+            }
+
+            $candidate = $factory->$method();
+            if ($candidate instanceof \Symfony\Component\HttpFoundation\Session\SessionInterface) {
+                return CsrfUtils::collectCsrfToken($candidate);
+            }
+        }
+    } catch (\Throwable $exception) {
+        return '';
+    }
+
+    return '';
+}
+
 function agentforgeModernDashboardItem($id, $title, $detail = '', $meta = '', $status = ''): array
 {
     return [
@@ -208,6 +253,52 @@ function agentforgeModernDashboardCard($id, $title, array $items, $emptyMessage 
         $card['span'] = $span;
     }
     return $card;
+}
+
+function agentforgeModernDashboardRenderHeader(array $patient): void
+{
+    $patientName = trim(implode(' ', array_filter([
+        agentforgeModernDashboardText($patient['fname'] ?? ''),
+        agentforgeModernDashboardText($patient['mname'] ?? ''),
+        agentforgeModernDashboardText($patient['lname'] ?? ''),
+    ])));
+    echo '<div class="agentforge-dashboard-host-header px-3 py-2">';
+    echo '<h2 class="mb-0">' . xlt('Medical Record Dashboard') . ($patientName !== '' ? ' - ' . text($patientName) : '') . '</h2>';
+    echo '</div>';
+}
+
+function agentforgeModernDashboardRenderNavItem(string $label, string $url, bool $active = false): void
+{
+    echo '<li class="nav-item">';
+    echo '<a class="nav-link text-dark' . ($active ? ' active' : '') . '" href="' . attr($url) . '" onclick="top.restoreSession()">' . text($label) . '</a>';
+    echo '</li>';
+}
+
+function agentforgeModernDashboardRenderPatientNav($pid): void
+{
+    $webroot = $GLOBALS['webroot'] ?? '';
+    $pidSuffix = attr_url((string)$pid);
+    echo '<nav class="navbar navbar-expand-md navbar-light bg-light">';
+    echo '<div class="collapse navbar-collapse show" id="myNavbar">';
+    echo '<ul class="navbar-nav">';
+    agentforgeModernDashboardRenderNavItem('Dashboard', $webroot . '/interface/patient_file/summary/demographics.php', true);
+    agentforgeModernDashboardRenderNavItem('History', $webroot . '/interface/patient_file/history/history.php');
+    echo '<li class="nav-item dropdown">';
+    echo '<a href="#" id="sdoc" class="nav-link dropdown-toggle text-body" data-toggle="dropdown" role="button" aria-haspopup="true" aria-expanded="false">' . xlt('Assessments') . ' <span class="caret"></span></a>';
+    echo '<ul class="dropdown-menu">';
+    echo '<li class="nav-item" id="sdoc1"><a class="nav-link text-dark" href="' . attr($webroot . '/interface/patient_file/history/history_sdoh_widget.php?pid=' . $pidSuffix) . '" onclick="top.restoreSession()"> ' . xlt('SDOH Assessment') . ' </a></li>';
+    echo '</ul>';
+    echo '</li>';
+    agentforgeModernDashboardRenderNavItem('Report', $webroot . '/interface/patient_file/report/patient_report.php');
+    agentforgeModernDashboardRenderNavItem('Documents', $webroot . '/controller.php?document&list&patient_id=' . $pidSuffix);
+    agentforgeModernDashboardRenderNavItem('Transactions', $webroot . '/interface/patient_file/transaction/transactions.php');
+    agentforgeModernDashboardRenderNavItem('Issues', $webroot . '/interface/patient_file/summary/stats_full.php?active=all');
+    agentforgeModernDashboardRenderNavItem('Ledger', $webroot . '/interface/reports/pat_ledger.php?form=1&patient_id=' . $pidSuffix);
+    agentforgeModernDashboardRenderNavItem('External Data', $webroot . '/interface/reports/external_data.php');
+    agentforgeModernDashboardRenderNavItem('Co-Pilot', $webroot . '/interface/modules/custom_modules/agentforge/public/index.php');
+    echo '</ul>';
+    echo '</div>';
+    echo '</nav>';
 }
 
 function agentforgeModernDashboardKeyValueItems(array $pairs): array
@@ -878,7 +969,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         // Process click on Delete link.
         function deleteme() { // @todo don't think this is used any longer!!
             const params = new URLSearchParams({
-                csrf_token_form: <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>,
+                csrf_token_form: <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>,
                 patient: <?php echo js_escape($pid); ?>
             });
             dlgopen('../deleter.php?' + params.toString(), '_blank', 500, 450, '', '', {
@@ -914,7 +1005,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 $.post("../../../library/ajax/user_settings.php", {
                     target: div,
                     mode: 0,
-                    csrf_token_form: <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>
+                    csrf_token_form: <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>
                 });
             } else {
                 $(target).find(".indicator").text(<?php echo xlj('collapse'); ?>);
@@ -922,7 +1013,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 $.post("../../../library/ajax/user_settings.php", {
                     target: div,
                     mode: 1,
-                    csrf_token_form: <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>
+                    csrf_token_form: <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>
                 });
             }
         }
@@ -959,7 +1050,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
             }
             let csrf = new FormData;
             // a security given.
-            csrf.append("csrf_token_form", <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
+            csrf.append("csrf_token_form", <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>);
             if (embedded === true) {
                 // special formatting in certain widgets.
                 csrf.append("embeddedScreen", true);
@@ -1074,7 +1165,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 $(this).on("click", ".complete_btn", function () {
                     let btn = $(this);
                     let csrf = new FormData;
-                    csrf.append("csrf_token_form", <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
+                    csrf.append("csrf_token_form", <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>);
                     fetch("pnotes_fragment.php?docUpdateId=" + encodeURIComponent(btn.attr('data-id')), {
                         method: "POST",
                         credentials: 'same-origin',
@@ -1114,7 +1205,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 });
                 $(".cdr-rule-btn-info-launch").on("click", function (e) {
                     let pid = <?php echo js_escape($pid); ?>;
-                    let csrfToken = <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>;
+                    let csrfToken = <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>;
                     let ruleId = $(this).data("ruleId");
                     const params = new URLSearchParams({
                         action: 'review!view',
@@ -1188,7 +1279,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 ORDER BY grp_seq, grp_title");
             while ($gfrow = sqlFetchArray($gfres)) { ?>
             $(<?php echo js_escape("#" . $gfrow['grp_form_id'] . "_ps_expand"); ?>).load("lbf_fragment.php?formname=" + <?php echo js_url($gfrow['grp_form_id']); ?>, {
-                csrf_token_form: <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>
+                csrf_token_form: <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>
             });
             <?php } ?>
             tabbify();
@@ -1359,7 +1450,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 }
             }
             let formData = new FormData();
-            formData.append("csrf_token_form", <?php echo js_escape(CsrfUtils::collectCsrfToken(session: $session)); ?>);
+            formData.append("csrf_token_form", <?php echo js_escape(agentforgeDashboardCsrfToken()); ?>);
             formData.append("target", targetStr);
             formData.append("mode", (target.classList.contains("show")) ? 0 : 1);
             top.restoreSession();
@@ -1510,13 +1601,21 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
 
 <body class="mt-1 patient-demographic bg-light">
     <?php
-    // Create and fire the patient demographics view event
-    $viewEvent = new ViewEvent($pid);
-    $viewEvent = OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher()->dispatch($viewEvent, ViewEvent::EVENT_HANDLE);
     $thisauth = AclMain::aclCheckCore('patients', 'demo');
+    $viewAuthorized = true;
+    if ($ed !== null) {
+        // Create and fire the patient demographics view event when the host OpenEMR build supports it.
+        $viewEvent = new ViewEvent($pid);
+        $viewEvent = $ed->dispatch($viewEvent, ViewEvent::EVENT_HANDLE);
+        $viewAuthorized = $viewEvent->authorized();
+    }
 
-    if (!$thisauth || !$viewEvent->authorized()) {
-        echo $twig->getTwig()->render('core/unauthorized-partial.html.twig', ['pageTitle' => xl("Medical Dashboard")]);
+    if (!$thisauth || !$viewAuthorized) {
+        if ($twig !== null) {
+            echo $twig->getTwig()->render('core/unauthorized-partial.html.twig', ['pageTitle' => xl("Medical Dashboard")]);
+        } else {
+            echo '<div class="alert alert-danger">' . xlt('Not authorized') . '</div>';
+        }
         exit();
     }
     ?>
@@ -1532,14 +1631,22 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         }
 
         if ($thisauth) :
-            OEGlobalsBag::getInstance()->getKernel()->getEventDispatcher()->dispatch(new RenderEvent($pid), RenderEvent::EVENT_SECTION_LIST_RENDER_TOP);
-            require_once("$include_root/patient_file/summary/dashboard_header.php");
+            if ($ed !== null) {
+                $ed->dispatch(new RenderEvent($pid), RenderEvent::EVENT_SECTION_LIST_RENDER_TOP);
+                require_once("$include_root/patient_file/summary/dashboard_header.php");
+            } else {
+                agentforgeModernDashboardRenderHeader($result);
+            }
         endif;
 
         $list_id = "dashboard"; // to indicate nav item is active, count and give correct id
         // Collect the patient menu then build it
-        $menuPatient = new PatientMenuRole($twig);
-        $menuPatient->displayHorizNavBarMenu();
+        if ($ed !== null && $twig !== null) {
+            $menuPatient = new PatientMenuRole($twig);
+            $menuPatient->displayHorizNavBarMenu();
+        } else {
+            agentforgeModernDashboardRenderPatientNav($pid);
+        }
         try {
             $agentforgeModernDashboardData = agentforgeModernDashboardBuildData($pid, $result, $result2, $result3, $insco_name);
         } catch (\Throwable $exception) {
@@ -2518,7 +2625,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         echo $twig->getTwig()->render('patient/partials/delete.html.twig', [
                             'isAdmin' => AclMain::aclCheckCore('admin', 'super'),
                             'allowPatientDelete' => OEGlobalsBag::getInstance()->getBoolean('allow_pat_delete'),
-                            'csrf' => CsrfUtils::collectCsrfToken(session: $session),
+                            'csrf' => agentforgeDashboardCsrfToken(),
                             'pid' => $pid
                         ]);
                     endif;
@@ -2548,5 +2655,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         });
     </script>
 </body>
-<?php $ed->dispatch(new RenderEvent($pid), RenderEvent::EVENT_RENDER_POST_PAGELOAD); ?>
+    <?php
+    if ($ed !== null) {
+        $ed->dispatch(new RenderEvent($pid), RenderEvent::EVENT_RENDER_POST_PAGELOAD);
+    }
+    ?>
 </html>
