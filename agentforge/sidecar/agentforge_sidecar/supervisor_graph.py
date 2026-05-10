@@ -278,7 +278,7 @@ def _initial_chat_route(request: AgentForgeRequest) -> str:
         return "retrieve_then_answer"
     if plan.answer_family == "document_facts":
         return "answer_document_facts"
-    if plan.answer_family == "labs":
+    if plan.answer_family in {"labs", "visit_history"}:
         return "answer_direct_evidence"
     if plan.answer_family == "med_reconciliation" and _plan_selected_medication_evidence(request, plan.selected_source_ids):
         return "answer_direct_evidence"

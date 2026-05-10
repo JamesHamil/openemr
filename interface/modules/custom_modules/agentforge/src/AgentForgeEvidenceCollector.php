@@ -32,6 +32,9 @@ class AgentForgeEvidenceCollector
         $this->collectAdapter('recent_notes', function () use ($pid, &$sources, &$statuses): void {
             $this->collectNotes($pid, $sources, $statuses);
         }, $statuses);
+        $this->collectAdapter('encounters', function () use ($pid, &$sources, &$statuses): void {
+            $this->collectEncounters($pid, $sources, $statuses);
+        }, $statuses);
         $this->collectAdapter('agentforge_documents', function () use ($pid, $message, &$sources, &$statuses): void {
             $this->collectExtractedDocumentFacts($pid, $message, $sources, $statuses);
         }, $statuses);
@@ -261,6 +264,11 @@ class AgentForgeEvidenceCollector
             "LEFT JOIN procedure_order_code poc ON po.procedure_order_id = poc.procedure_order_id " .
             "AND prep.procedure_order_seq = poc.procedure_order_seq " .
             "WHERE po.patient_id = ? " .
+            "AND LOWER(COALESCE(pr.result_text, '')) NOT REGEXP 'address|date of birth|dob|mrn|legal name|^name$|ordering provider|patient phone|report date|^sex$|specimen type|^status$|accession|loinc|interpretation' " .
+            "AND (TRIM(COALESCE(pr.units, '')) <> '' " .
+            "OR TRIM(COALESCE(pr.`range`, '')) <> '' " .
+            "OR UPPER(TRIM(COALESCE(pr.abnormal, ''))) IN ('H', 'L', 'N', 'HIGH', 'LOW', 'NORMAL', 'ABNORMAL') " .
+            "OR LOWER(COALESCE(pr.result_text, '')) REGEXP 'albumin|alkaline phosphatase|alt|ast|bilirubin|bun|calcium|chloride|co2|creatinine|egfr|glucose|hematocrit|hemoglobin|lymphocyte|mcv|metamyelocyte|monocyte|neutrophil|platelet|potassium|promyelocyte|rbc|sodium|total protein|blast|wbc') " .
             "ORDER BY COALESCE(pr.date, prep.date_report, prep.date_collected, po.date_collected, po.date_ordered) DESC",
             [$pid]
         );
@@ -329,6 +337,56 @@ class AgentForgeEvidenceCollector
         $statuses[] = $count === 0
             ? $this->status('recent_notes', 'unavailable', 'No patient notes found in retrieved pnotes records.')
             : $this->status('recent_notes', 'success');
+    }
+
+    private function collectEncounters(string $pid, array &$sources, array &$statuses): void
+    {
+        $result = sqlStatement(
+            "SELECT fe.encounter, fe.date, fe.reason, pc.pc_catname " .
+            "FROM form_encounter fe " .
+            "LEFT JOIN openemr_postcalendar_categories pc ON pc.pc_catid = fe.pc_catid " .
+            "WHERE fe.pid = ? " .
+            "ORDER BY fe.date DESC",
+            [$pid]
+        );
+
+        $count = 0;
+        while ($row = sqlFetchArray($result)) {
+            $encounterId = trim((string)($row['encounter'] ?? ''));
+            $date = trim((string)($row['date'] ?? ''));
+            if ($encounterId === '' || $date === '') {
+                continue;
+            }
+
+            $category = trim(strip_tags((string)($row['pc_catname'] ?? '')));
+            $reason = trim(strip_tags((string)($row['reason'] ?? '')));
+            $parts = array_values(array_filter(
+                [$date, $category, $reason],
+                static function (string $part): bool {
+                    return $part !== '';
+                }
+            ));
+
+            $count++;
+            $this->addSource(
+                $sources,
+                'encounter-' . $encounterId,
+                'encounter',
+                'form_encounter.date_reason',
+                implode('; ', $parts),
+                $date,
+                $reason,
+                [
+                    'source_table' => 'form_encounter',
+                    'encounter_id' => $encounterId,
+                    'category' => $category,
+                ]
+            );
+        }
+
+        $statuses[] = $count === 0
+            ? $this->status('encounters', 'unavailable', 'No encounters found in retrieved form_encounter records.')
+            : $this->status('encounters', 'success');
     }
 
     private function collectExtractedDocumentFacts(string $pid, string $message, array &$sources, array &$statuses): void

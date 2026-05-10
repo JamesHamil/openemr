@@ -10,11 +10,13 @@
 
 require_once(__DIR__ . "/../../../../globals.php");
 require_once(__DIR__ . "/../src/AgentForgeOpenEmrCompat.php");
+require_once(__DIR__ . "/../src/AgentForgeChartWritebackService.php");
 require_once(__DIR__ . "/../src/AgentForgeDocumentStore.php");
 
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Common\Csrf\CsrfUtils;
 use OpenEMR\Common\Logging\EventAuditLogger;
+use OpenEMR\Modules\AgentForge\AgentForgeChartWritebackService;
 use OpenEMR\Modules\AgentForge\AgentForgeDocumentStore;
 
 header('Content-Type: application/json');
@@ -124,6 +126,12 @@ try {
     if ($payload === null) {
         agentforge_document_facts_json(agentforge_document_facts_error('Saved facts could not be reloaded.', 'reload_failed'), 500);
     }
+    $payload['chart_writeback'] = (new AgentForgeChartWritebackService())->writeBack(
+        $requestPid,
+        $agentforgeDocumentId,
+        $openEmrDocumentId,
+        $payload
+    );
     $payload['recent_documents'] = $store->recentDocuments($requestPid);
 
     EventAuditLogger::getInstance()->newEvent(

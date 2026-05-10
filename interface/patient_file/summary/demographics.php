@@ -64,7 +64,12 @@ use OpenEMR\Services\PatientIssuesService;
 use OpenEMR\Services\PatientService;
 use Symfony\Component\EventDispatcher\EventDispatcher;
 
-$session = SessionWrapperFactory::getInstance()->getActiveSession();
+$session = new class {
+    public function get(string $key)
+    {
+        return $_SESSION[$key] ?? null;
+    }
+};
 
 if (!isset($pid)) {
     $pid = $session->get('pid') ?? $_GET['pid'] ?? null;
@@ -155,7 +160,11 @@ function agentforgeModernDashboardLoaded(array $data): array
 
 function agentforgeModernDashboardText($value): string
 {
-    return trim((string)($value ?? ''));
+    $text = (string)($value ?? '');
+    if ($text !== '' && function_exists('mb_check_encoding') && !mb_check_encoding($text, 'UTF-8')) {
+        $text = mb_convert_encoding($text, 'UTF-8', 'UTF-8');
+    }
+    return trim($text);
 }
 
 function agentforgeModernDashboardArray($value): array
@@ -212,6 +221,74 @@ function agentforgeModernDashboardKeyValueItems(array $pairs): array
         $items[] = agentforgeModernDashboardItem($id, $title, $detail, $meta, $status);
     }
     return $items;
+}
+
+function agentforgeModernDashboardFallbackData($pid, array $patient, string $message = ''): array
+{
+    $patientName = trim(implode(' ', array_filter([
+        agentforgeModernDashboardText($patient['fname'] ?? ''),
+        agentforgeModernDashboardText($patient['mname'] ?? ''),
+        agentforgeModernDashboardText($patient['lname'] ?? ''),
+    ])));
+    $fallbackMessage = $message !== '' ? $message : 'Dashboard details are temporarily unavailable.';
+    $emptyCard = fn(string $id, string $title, string $span = ''): array => agentforgeModernDashboardCard(
+        $id,
+        $title,
+        [],
+        $fallbackMessage,
+        $span
+    );
+
+    return [
+        'patient' => [
+            'status' => 'loaded',
+            'data' => [
+                'id' => (string)$pid,
+                'name' => $patientName ?: 'Unnamed patient',
+                'dateOfBirth' => agentforgeModernDashboardText($patient['DOB_YMD'] ?? $patient['DOB'] ?? '') ?: 'Unknown DOB',
+                'sex' => agentforgeModernDashboardText($patient['sex'] ?? '') ?: 'Unknown',
+                'mrn' => agentforgeModernDashboardText($patient['pubpid'] ?? '') ?: (string)$pid,
+                'active' => empty($patient['deceased_date']),
+            ],
+        ],
+        'allergies' => agentforgeModernDashboardLoaded([]),
+        'conditions' => agentforgeModernDashboardLoaded([]),
+        'medications' => agentforgeModernDashboardLoaded([]),
+        'prescriptions' => agentforgeModernDashboardLoaded([]),
+        'careTeam' => agentforgeModernDashboardLoaded([]),
+        'encounters' => agentforgeModernDashboardLoaded([]),
+        'sections' => [
+            [
+                'id' => 'clinical-summary',
+                'cards' => [
+                    $emptyCard('allergies', 'Allergies'),
+                    $emptyCard('medical-problems', 'Medical Problems'),
+                    $emptyCard('medications', 'Medications'),
+                    $emptyCard('prescriptions', 'Prescriptions', 'full'),
+                ],
+            ],
+            [
+                'id' => 'care-context',
+                'cards' => [
+                    $emptyCard('care-team', 'Care Team', 'full'),
+                    $emptyCard('encounters', 'Encounter History', 'full'),
+                ],
+            ],
+        ],
+    ];
+}
+
+function agentforgeModernDashboardJson(array $data): string
+{
+    $json = json_encode($data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE);
+    if ($json === false) {
+        error_log('AgentForge dashboard JSON encoding failed: ' . json_last_error_msg());
+        $json = json_encode(
+            agentforgeModernDashboardFallbackData('', [], 'Dashboard data could not be encoded.'),
+            JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE
+        );
+    }
+    return $json ?: '{}';
 }
 
 function agentforgeModernDashboardBuildData($pid, array $patient, $employer = [], $insurance = [], string $insuranceProviderName = ''): array
@@ -297,15 +374,20 @@ function agentforgeModernDashboardBuildData($pid, array $patient, $employer = []
         [$pid]
     );
     while ($encounter = sqlFetchArray($encounterResult)) {
+        $encounterDate = agentforgeModernDashboardText($encounter['date'] ?? '');
         $encounters[] = [
             ...agentforgeModernDashboardItem(
                 $encounter['encounter'] ?? '',
                 $encounter['pc_catname'] ?? 'Encounter',
                 $encounter['reason'] ?? '',
-                $encounter['date'] ?? '',
+                $encounterDate,
                 'recorded'
             ),
-            'dateSort' => !empty($encounter['date']) ? strtotime((string)$encounter['date']) * 1000 : 0,
+            'startDate' => $encounterDate,
+            'sourceType' => 'encounter',
+            'encounterId' => (string)($encounter['encounter'] ?? ''),
+            'reviewDate' => $encounterDate !== '' ? substr($encounterDate, 0, 10) : '',
+            'dateSort' => $encounterDate !== '' ? strtotime($encounterDate) * 1000 : 0,
         ];
     }
 
@@ -398,11 +480,41 @@ function agentforgeModernDashboardBuildData($pid, array $patient, $employer = []
 
     $labs = [];
     $labResult = sqlStatement(
-        "SELECT procedure_report.procedure_report_id, procedure_report.date_collected AS date FROM procedure_report JOIN procedure_order ON procedure_report.procedure_order_id = procedure_order.procedure_order_id WHERE procedure_order.patient_id = ? ORDER BY procedure_report.date_collected DESC LIMIT 5",
+        "SELECT pr.procedure_result_id, pr.result_text, pr.result, pr.units, pr.`range`, pr.abnormal, pr.result_status, " .
+        "COALESCE(pr.date, procedure_report.date_report, procedure_report.date_collected, procedure_order.date_collected, procedure_order.date_ordered) AS date, " .
+        "poc.procedure_name " .
+        "FROM procedure_result pr " .
+        "JOIN procedure_report ON pr.procedure_report_id = procedure_report.procedure_report_id " .
+        "JOIN procedure_order ON procedure_report.procedure_order_id = procedure_order.procedure_order_id " .
+        "LEFT JOIN procedure_order_code poc ON procedure_order.procedure_order_id = poc.procedure_order_id " .
+        "AND procedure_report.procedure_order_seq = poc.procedure_order_seq " .
+        "WHERE procedure_order.patient_id = ? " .
+        "AND LOWER(COALESCE(pr.result_text, '')) NOT REGEXP 'address|date of birth|dob|mrn|legal name|^name$|ordering provider|patient phone|report date|^sex$|specimen type|^status$|accession|loinc|interpretation' " .
+        "AND (TRIM(COALESCE(pr.units, '')) <> '' " .
+        "OR TRIM(COALESCE(pr.`range`, '')) <> '' " .
+        "OR UPPER(TRIM(COALESCE(pr.abnormal, ''))) IN ('H', 'L', 'N', 'HIGH', 'LOW', 'NORMAL', 'ABNORMAL') " .
+        "OR LOWER(COALESCE(pr.result_text, '')) REGEXP 'albumin|alkaline phosphatase|alt|ast|bilirubin|bun|calcium|chloride|co2|creatinine|egfr|glucose|hematocrit|hemoglobin|lymphocyte|mcv|metamyelocyte|monocyte|neutrophil|platelet|potassium|promyelocyte|rbc|sodium|total protein|blast|wbc') " .
+        "ORDER BY COALESCE(pr.date, procedure_report.date_report, procedure_report.date_collected, procedure_order.date_collected, procedure_order.date_ordered) DESC, pr.result_text ASC",
         [$pid]
     );
     while ($lab = sqlFetchArray($labResult)) {
-        $labs[] = agentforgeModernDashboardItem($lab['procedure_report_id'] ?? '', 'Lab result', '', $lab['date'] ?? '', 'available');
+        $label = agentforgeModernDashboardText($lab['result_text'] ?? '') ?: (agentforgeModernDashboardText($lab['procedure_name'] ?? '') ?: 'Lab result');
+        $resultValue = agentforgeModernDashboardText($lab['result'] ?? '');
+        $units = agentforgeModernDashboardText($lab['units'] ?? '');
+        $range = agentforgeModernDashboardText($lab['range'] ?? '');
+        $abnormal = agentforgeModernDashboardText($lab['abnormal'] ?? '');
+        $detailParts = array_filter([
+            trim($resultValue . ($units !== '' ? ' ' . $units : '')),
+            $range !== '' ? 'range ' . $range : '',
+            $abnormal !== '' ? 'abnormal ' . $abnormal : '',
+        ]);
+        $labs[] = agentforgeModernDashboardItem(
+            $lab['procedure_result_id'] ?? '',
+            $label,
+            implode('; ', $detailParts),
+            $lab['date'] ?? '',
+            $abnormal !== '' ? $abnormal : ($lab['result_status'] ?? 'available')
+        );
     }
 
     $vitals = [];
@@ -730,9 +842,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
     Header::setupHeader(['common', 'utility']);
     require_once("$srcdir/options.js.php");
     $agentforgeDashboardAssetBase = ($GLOBALS['webroot'] ?? '') . '/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets';
+    $agentforgeDashboardAssetVersion = '20260510-encounter-dates';
     ?>
-    <link rel="stylesheet" href="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.css'); ?>">
-    <script type="module" src="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.js'); ?>"></script>
+    <link rel="stylesheet" href="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.css?v=' . $agentforgeDashboardAssetVersion); ?>">
     <script>
         // Process click on diagnosis for referential cds popup.
         function referentialCdsClick(codetype, codevalue) {
@@ -1428,7 +1540,16 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         // Collect the patient menu then build it
         $menuPatient = new PatientMenuRole($twig);
         $menuPatient->displayHorizNavBarMenu();
-        $agentforgeModernDashboardData = agentforgeModernDashboardBuildData($pid, $result, $result2, $result3, $insco_name);
+        try {
+            $agentforgeModernDashboardData = agentforgeModernDashboardBuildData($pid, $result, $result2, $result3, $insco_name);
+        } catch (\Throwable $exception) {
+            error_log('AgentForge modern dashboard data failed for pid ' . (string)$pid . ': ' . $exception->getMessage());
+            $agentforgeModernDashboardData = agentforgeModernDashboardFallbackData(
+                $pid,
+                $result,
+                'Dashboard details are temporarily unavailable.'
+            );
+        }
         // Get the document ID of the patient ID card if access to it is wanted here.
         $idcard_doc_id = false;
         if (OEGlobalsBag::getInstance()->getString('patient_id_category_name')) {
@@ -1437,8 +1558,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         ?>
         <div id="agentforge-modern-dashboard-root"></div>
         <script>
-            window.__AGENTFORGE_PATIENT_DASHBOARD__ = <?php echo json_encode($agentforgeModernDashboardData, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+            window.__AGENTFORGE_PATIENT_DASHBOARD__ = <?php echo agentforgeModernDashboardJson($agentforgeModernDashboardData); ?>;
         </script>
+        <script type="module" src="<?php echo attr($agentforgeDashboardAssetBase . '/patient-dashboard.js?v=' . $agentforgeDashboardAssetVersion); ?>"></script>
         <?php if (($_GET['agentforge_legacy_dashboard'] ?? '') === '1') : ?>
         <div class="main mb-1">
             <!-- start main content div -->

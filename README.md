@@ -42,7 +42,7 @@ Week 2 multimodal expansion:
 - [Week 2 eval plan](docs/week-2/EVAL_PLAN.md): 50-case boolean eval gate strategy.
 - [Week 2 submission evidence](docs/week-2/SUBMISSION_EVIDENCE.md): PR-blocking eval CI and observable deployed demo evidence.
 - [Week 2 cost and latency plan](docs/week-2/COST_LATENCY_PLAN.md): measurement and bottleneck plan.
-- [Week 2 cost and latency report](docs/week-2/COST_LATENCY_REPORT.md): current baseline, live cost drivers, and scale notes.
+- [Week 2 cost and latency report](docs/week-2/COST_LATENCY_REPORT.md): actual dev spend, production projection, p50/p95 latency, and bottlenecks.
 - [Week 2 demo checklist](docs/week-2/DEMO_CHECKLIST.md): recording flow for the checkpoint and final submission.
 - [Patient dashboard migration](PATIENT_DASHBOARD_MIGRATION.md): surprise challenge defense for the React/Vite dashboard port.
 

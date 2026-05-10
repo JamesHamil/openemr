@@ -38,8 +38,9 @@ function LoadedEncounterCalendar({
   encounters: EncounterItem[];
   onReviewVisit?: (encounter: EncounterItem) => void;
 }) {
-  const encountersByDate = useMemo(() => groupEncountersByDate(encounters), [encounters]);
-  const firstVisitKey = encounterDateKey(encounters[0]);
+  const datedEncounters = useMemo(() => normalizeDatedEncounters(encounters), [encounters]);
+  const encountersByDate = useMemo(() => groupEncountersByDate(datedEncounters), [datedEncounters]);
+  const firstVisitKey = encounterDateKey(datedEncounters[0]) || dateKey(new Date());
   const [view, setView] = useState<CalendarView>('month');
   const [selectedDateKey, setSelectedDateKey] = useState(firstVisitKey);
 
@@ -52,6 +53,10 @@ function LoadedEncounterCalendar({
     [encountersByDate, selectedDate]
   );
   const weekDays = useMemo(() => buildWeekDays(encountersByDate, selectedDate), [encountersByDate, selectedDate]);
+
+  if (!datedEncounters.length) {
+    return <EncounterShell countLabel="0" message="No dated visits recorded." />;
+  }
 
   return (
     <section className="af-visit-history-card" aria-label="Encounter History">
@@ -89,7 +94,7 @@ function LoadedEncounterCalendar({
       <div className="af-visit-history-card__body">
         {view === 'all' ? (
           <AllVisitsView
-            encounters={encounters}
+            encounters={datedEncounters}
             onReviewVisit={onReviewVisit}
             onSelectEncounter={(encounter) => {
               setSelectedDateKey(encounterDateKey(encounter));
@@ -110,7 +115,7 @@ function LoadedEncounterCalendar({
           <VisitDetailsPanel
             date={selectedDate}
             encounters={selectedEncounters}
-            totalVisits={encounters.length}
+            totalVisits={datedEncounters.length}
             onReviewVisit={onReviewVisit}
           />
         )}
@@ -352,6 +357,9 @@ function EncounterShell({ countLabel, message, tone = 'muted' }: { countLabel: s
 function groupEncountersByDate(encounters: EncounterItem[]): Map<string, EncounterItem[]> {
   return encounters.reduce<Map<string, EncounterItem[]>>((map, encounter) => {
     const key = encounterDateKey(encounter);
+    if (!key) {
+      return map;
+    }
     const existing = map.get(key) || [];
     existing.push(encounter);
     map.set(key, existing);
@@ -384,7 +392,7 @@ function calendarDay(start: Date, offset: number, selectedMonth: number, encount
 }
 
 function encounterDateKey(encounter: EncounterItem): string {
-  return encounter.startDate.slice(0, 10);
+  return (encounter?.startDate || '').slice(0, 10);
 }
 
 function dateFromKey(key: string): Date {
@@ -433,6 +441,20 @@ function formatEncounterDate(value: string): string {
     return value;
   }
   return shortDateLabel(date);
+}
+
+function normalizeDatedEncounters(encounters: EncounterItem[]): EncounterItem[] {
+  return encounters
+    .map((encounter) => {
+      const fallbackDate = encounter.startDate || encounter.reviewDate || encounter.meta || '';
+      return {
+        ...encounter,
+        startDate: fallbackDate,
+        dateSort: encounter.dateSort || (fallbackDate ? Date.parse(fallbackDate) || 0 : 0),
+      };
+    })
+    .filter((encounter) => encounterDateKey(encounter))
+    .sort((left, right) => right.dateSort - left.dateSort);
 }
 
 function shortDateLabel(date: Date): string {

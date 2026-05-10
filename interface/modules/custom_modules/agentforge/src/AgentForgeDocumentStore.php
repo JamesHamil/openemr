@@ -175,7 +175,14 @@ class AgentForgeDocumentStore
             $factIndex = count($facts);
             $citation = json_decode((string)$row['citation_json'], true);
             if (is_array($citation)) {
-                $fallbackBox = $this->medicationListFallbackBoundingBox(
+                if (
+                    (string)$document['document_type'] === 'intake_form' &&
+                    strpos(strtolower((string)$document['mime_type']), 'image/') === 0 &&
+                    $this->isSuspiciousIntakeImageBox($citation, (string)$row['fact_type'])
+                ) {
+                    unset($citation['bounding_box'], $citation['bounding_box_source']);
+                }
+                $fallbackBox = $this->imageFallbackBoundingBox(
                     (string)$document['document_type'],
                     (string)$document['mime_type'],
                     $citation,
@@ -184,6 +191,7 @@ class AgentForgeDocumentStore
                 );
                 if ($fallbackBox !== null) {
                     $citation['bounding_box'] = $fallbackBox;
+                    $citation['bounding_box_source'] = 'agentforge-fallback';
                 }
             }
             $facts[] = [
@@ -365,29 +373,65 @@ class AgentForgeDocumentStore
         return $normalized;
     }
 
-    private function medicationListFallbackBoundingBox(
+    private function imageFallbackBoundingBox(
         string $documentType,
         string $mimeType,
         array $citation,
         string $factType,
         int $index
     ): ?array {
-        if ($documentType !== 'medication_list' || strpos(strtolower($mimeType), 'image/') !== 0) {
+        if (strpos(strtolower($mimeType), 'image/') !== 0) {
             return null;
         }
         if (isset($citation['bounding_box']) && is_array($citation['bounding_box'])) {
             return null;
         }
-        if (!in_array($factType, ['medication', 'medication_document'], true)) {
-            return null;
+
+        if ($documentType === 'medication_list' && in_array($factType, ['medication', 'medication_document'], true)) {
+            return [
+                'x' => 0.06,
+                'y' => min(0.9, 0.17 + ($index * 0.046)),
+                'width' => 0.88,
+                'height' => 0.042,
+                'page' => 1,
+                'bounding_box_source' => 'agentforge-fallback',
+            ];
         }
-        return [
-            'x' => 0.06,
-            'y' => min(0.9, 0.17 + ($index * 0.046)),
-            'width' => 0.88,
-            'height' => 0.042,
-            'page' => 1,
+
+        return null;
+    }
+
+    private function isSuspiciousIntakeImageBox(array $citation, string $factType): bool
+    {
+        $box = is_array($citation['bounding_box'] ?? null) ? $citation['bounding_box'] : null;
+        if ($box === null || !isset($box['y']) || !is_numeric($box['y'])) {
+            return false;
+        }
+
+        $fieldKey = strtolower(
+            (string)($citation['field_or_chunk_id'] ?? '') . ' ' .
+            $factType . ' ' .
+            (string)($citation['quote_or_value'] ?? '')
+        );
+        $topDemographicTerms = [
+            'name',
+            'dob',
+            'date of birth',
+            'birth',
+            'mrn',
+            'sex',
+            'gender',
+            'race',
+            'ethnicity',
+            'email',
         ];
+        foreach ($topDemographicTerms as $term) {
+            if (strpos($fieldKey, $term) !== false) {
+                return (float)$box['y'] > 0.38;
+            }
+        }
+
+        return false;
     }
 
     public function recentFactSources(string $pid, ?int $limit = null, string $message = ''): array

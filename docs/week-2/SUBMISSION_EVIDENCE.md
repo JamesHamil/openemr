@@ -53,6 +53,8 @@ safe_refusal: 50/50
 no_phi_in_logs: 50/50
 ```
 
+Cost and latency evidence is summarized in [`COST_LATENCY_REPORT.md`](COST_LATENCY_REPORT.md), including actual development/demo model spend, projected production model cost, p50/p95 latency, and bottleneck analysis.
+
 To make the workflow hard PR-blocking in GitHub, mark `AgentForge Week 2 Evals / week2-evals` as a required status check in branch protection. The repository contains the blocking check, gate logic, and pre-push git hook; GitHub branch protection is the repository setting that makes a required check unmergeable when it fails.
 
 ## Observable Deployed Demo

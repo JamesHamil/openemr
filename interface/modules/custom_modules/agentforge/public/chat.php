@@ -175,13 +175,14 @@ function agentforge_error_response(string $message, string $code, string $status
 
 function agentforge_cache_key(string $pid, string $encounterId, string $message, array $bundle): string
 {
+    $cacheVersion = 'agentforge-chat-visit-history-v1';
     $fingerprintPayload = [
         'sources' => $bundle['sources'] ?? [],
         'adapter_status' => $bundle['adapter_status'] ?? [],
     ];
     $fingerprint = hash('sha256', json_encode($fingerprintPayload, JSON_UNESCAPED_SLASHES));
     $normalizedMessage = preg_replace('/\s+/', ' ', strtolower(trim($message)));
-    return hash('sha256', $pid . '|' . $encounterId . '|' . $normalizedMessage . '|' . $fingerprint);
+    return hash('sha256', $cacheVersion . '|' . $pid . '|' . $encounterId . '|' . $normalizedMessage . '|' . $fingerprint);
 }
 
 function agentforge_cache_get($session, string $key): ?array

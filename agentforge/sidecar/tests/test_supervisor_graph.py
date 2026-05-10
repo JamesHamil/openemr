@@ -153,6 +153,43 @@ def _chart_medication_chat_request(message: str) -> AgentForgeRequest:
     )
 
 
+def _visit_history_chat_request(message: str) -> AgentForgeRequest:
+    return AgentForgeRequest(
+        schema_version="agentforge.request.v1",
+        request_id="graph-chat-visit-history",
+        conversation_id="graph-conversation",
+        expires_at=(datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(),
+        purpose="unit-test",
+        scope=_scope("visit-history"),
+        message=message,
+        evidence_bundle=RoundingContextBundle(
+            id="bundle-graph-visit-history",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            patient_context=PatientContext(patient_id="1", encounter_id="2"),
+            sources=[
+                EvidenceSource(
+                    id="patient-name-1",
+                    record_type="demographic",
+                    recorded_at=datetime.now(timezone.utc).isoformat(),
+                    field_path="patient_data.fname_lname",
+                    value="Big ol Bob",
+                ),
+                EvidenceSource(
+                    id="encounter-1",
+                    record_type="encounter",
+                    recorded_at="2019-05-01 00:00:00",
+                    field_path="form_encounter.date_reason",
+                    value="2019-05-01; General examination of patient (procedure)",
+                ),
+            ],
+            adapter_status=[
+                AdapterStatus(adapter="patient_snapshot", status="success"),
+                AdapterStatus(adapter="encounters", status="success"),
+            ],
+        ),
+    )
+
+
 class SupervisorGraphTest(unittest.TestCase):
     def test_chat_graph_records_supervisor_worker_and_guideline_metadata(self):
         response, trace = handle_chat(_chat_request("What should I review for this abnormal potassium?"), Settings(mode="mock"))
@@ -196,6 +233,18 @@ class SupervisorGraphTest(unittest.TestCase):
     def test_chart_medication_chat_skips_guideline_retrieval_after_writeback(self):
         response, trace = handle_chat(
             _chart_medication_chat_request("what medications is this patient on?"),
+            Settings(mode="mock"),
+        )
+
+        self.assertEqual(trace.supervisor_route, "answer_direct_evidence")
+        self.assertEqual(trace.graph_nodes, ["supervisor", "answer_worker", "critic_verifier"])
+        self.assertNotIn("evidence-retriever", [handoff.worker for handoff in trace.worker_handoffs])
+        self.assertEqual(trace.guideline_retrieval_hits, 0)
+        self.assertEqual(response.debug_trace["guideline_retrieval"]["hits"], 0)
+
+    def test_visit_history_chat_skips_guideline_retrieval(self):
+        response, trace = handle_chat(
+            _visit_history_chat_request("What is this patient's name? When was their last visit?"),
             Settings(mode="mock"),
         )
 

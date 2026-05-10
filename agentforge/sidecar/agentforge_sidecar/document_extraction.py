@@ -24,10 +24,12 @@ from .tool_agent import _usage_tokens
 
 EXTRACTION_PROMPT = """You are AgentForge's clinical document extraction worker.
 Extract only facts visible in the provided document. Do not infer missing facts.
-Return strict structured facts with citations. For PDF/image inputs, include normalized page-relative
-bounding boxes only when the exact source region is visually identifiable. Use x, y, width, and height
-values from 0.0 to 1.0, plus an optional integer page. Otherwise leave bounding_box null and preserve
-page/section plus quote_or_value.
+Return strict structured facts with citations. For image inputs, every extracted fact should include a
+best-effort normalized page-relative bounding_box around the visible value or the full source row. For
+tilted/scanned images, use the smallest axis-aligned rectangle that contains the tilted text/row. For PDF
+inputs, include normalized page-relative bounding boxes when the source region is visually identifiable.
+Use x, y, width, and height values from 0.0 to 1.0, plus an optional integer page. If no reliable region
+can be identified, leave bounding_box null and preserve page/section plus quote_or_value.
 For medication_list documents, extract each visible medication as a separate medication fact when possible,
 including name, dose, route, frequency, status, prescriber, and start/stop dates only when visible.
 Use low confidence and warnings for uncertain, missing, or unreadable fields."""

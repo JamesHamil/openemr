@@ -13,6 +13,8 @@ LABEL org.opencontainers.image.description="OpenEMR runtime with AgentForge proj
 
 RUN mkdir -p /var/www/localhost/htdocs/openemr/agentforge
 RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
+RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/patient_file/history
+RUN mkdir -p /var/www/localhost/htdocs/openemr/interface/patient_file/summary
 RUN mkdir -p /var/www/localhost/htdocs/openemr/templates/documents
 
 COPY docker/railway/sqlconf.php /var/www/localhost/htdocs/openemr/sites/default/sqlconf.php
@@ -21,5 +23,7 @@ COPY docs /var/www/localhost/htdocs/openemr/agentforge/docs
 COPY agentforge/contracts /var/www/localhost/htdocs/openemr/agentforge/contracts
 COPY agentforge/evals /var/www/localhost/htdocs/openemr/agentforge/evals
 COPY interface/modules/custom_modules/agentforge /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge
+COPY interface/patient_file/history/encounters.php /var/www/localhost/htdocs/openemr/interface/patient_file/history/encounters.php
+COPY interface/patient_file/summary/demographics.php /var/www/localhost/htdocs/openemr/interface/patient_file/summary/demographics.php
 COPY --from=patient-dashboard-build /app/dist /var/www/localhost/htdocs/openemr/interface/modules/custom_modules/agentforge/public/patient-dashboard
 COPY templates/documents/general_view.html /var/www/localhost/htdocs/openemr/templates/documents/general_view.html

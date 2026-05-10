@@ -33,6 +33,11 @@ PHONE_FIELD_LABELS = {
     "emergency_contact_phone": "Emergency contact phone",
     "pharmacy_phone": "Pharmacy phone",
 }
+IDENTITY_FIELD_LABELS = {
+    "name": "Name",
+    "date_of_birth": "Date of Birth",
+    "sex": "Sex",
+}
 CONTACT_FIELD_LABELS = {
     "emergency_contact_name": "Emergency contact",
     "emergency_contact_phone": "Emergency contact phone",
@@ -317,11 +322,7 @@ def openai_response(request: AgentForgeRequest, trace_id: str, settings: Setting
                 citation_coverage=1.0,
                 verifier_result="passed",
                 repair_count=0,
-                status_reason=(
-                    "deterministic_lab_answer"
-                    if evidence_plan.answer_family == "labs"
-                    else "deterministic_document_fact_answer"
-                ),
+                status_reason=_deterministic_status_reason(evidence_plan),
                 source_selection_mode=source_selection_mode,
                 schema_evidence_expansion=schema_expansion,
                 model_call_count=tool_diag.model_call_count,
@@ -508,6 +509,14 @@ def _source_selection_mode(settings: Settings, evidence_plan: EvidencePlan) -> s
     if evidence_plan.selected_source_ids and evidence_plan.answer_family in {"long_tail", "broad_brief", "labs"}:
         return "deterministic"
     return "model_tool_phase"
+
+
+def _deterministic_status_reason(evidence_plan: EvidencePlan) -> str:
+    if evidence_plan.answer_family == "labs":
+        return "deterministic_lab_answer"
+    if evidence_plan.answer_family == "visit_history":
+        return "deterministic_visit_history_answer"
+    return "deterministic_document_fact_answer"
 
 
 def _deterministic_verify_metadata(
@@ -996,6 +1005,8 @@ def _deterministic_document_fact_response(
         return _deterministic_medication_response(selected_sources, trace_id)
     if evidence_plan.answer_family == "labs":
         return _deterministic_lab_response(request, selected_sources, trace_id)
+    if evidence_plan.answer_family == "visit_history":
+        return _deterministic_visit_history_response(request, selected_sources, trace_id)
     if evidence_plan.answer_family != "document_facts":
         return None
     document_sources = [source for source in selected_sources if source.record_type == "document_fact"]
@@ -1003,16 +1014,17 @@ def _deterministic_document_fact_response(
         return None
 
     groups = set(schema_expansion.get("groups", []))
-    answer = _direct_document_fact_answer(request.message, document_sources, groups)
+    direct_sources = _direct_document_fact_answer_sources(request, selected_sources, document_sources, groups)
+    answer = _direct_document_fact_answer(request.message, direct_sources, groups)
     claims = [
         Claim(
             id=f"claim-{index + 1}",
-            text=f"{_document_fact_label_value(source)[0]} is {_document_fact_label_value(source)[1]}.",
-            claim_type="document_fact",
+            text=f"{_direct_source_label_value(source)[0]} is {_direct_source_label_value(source)[1]}.",
+            claim_type=source.record_type,
             source_ids=[source.id],
             support_status="supported",
         )
-        for index, source in enumerate(document_sources)
+        for index, source in enumerate(direct_sources)
     ]
     return AgentForgeResponse(
         answer=answer,
@@ -1024,7 +1036,7 @@ def _deterministic_document_fact_response(
             )
         ],
         claims=claims,
-        sources=[_response_source_from_evidence(source) for source in document_sources],
+        sources=[_response_source_from_evidence(source) for source in direct_sources],
         warnings=[],
         blocked_claims=[],
         verification_status="verified",
@@ -1032,7 +1044,7 @@ def _deterministic_document_fact_response(
         debug_trace={
             "deterministic_answer": {
                 "reason": "structured_document_fact_lookup",
-                "source_ids": [source.id for source in document_sources],
+                "source_ids": [source.id for source in direct_sources],
             }
         },
     )
@@ -1153,6 +1165,121 @@ def _deterministic_lab_response(
     )
 
 
+def _deterministic_visit_history_response(
+    request: AgentForgeRequest,
+    selected_sources: list[EvidenceSource],
+    trace_id: str,
+) -> AgentForgeResponse | None:
+    name_source = _chart_name_source(selected_sources) if _asks_name_or_identity(request.message) else None
+    latest_encounter = _latest_encounter_source(selected_sources)
+    if name_source is None and latest_encounter is None:
+        return None
+
+    answer_parts: list[str] = []
+    claims: list[Claim] = []
+    response_sources: list[EvidenceSource] = []
+
+    if name_source is not None:
+        name = name_source.value.strip()
+        answer_parts.append(f"Patient name: {name}.")
+        claims.append(
+            Claim(
+                id=f"claim-{len(claims) + 1}",
+                text=f"Patient name is {name}.",
+                claim_type="demographic",
+                source_ids=[name_source.id],
+                support_status="supported",
+            )
+        )
+        response_sources.append(name_source)
+
+    warnings: list[WarningItem] = []
+    if latest_encounter is not None:
+        visit_label = _encounter_source_label(latest_encounter)
+        answer_parts.append(f"Last visit: {visit_label}.")
+        claims.append(
+            Claim(
+                id=f"claim-{len(claims) + 1}",
+                text=f"Most recent retrieved encounter is {visit_label}.",
+                claim_type="encounter",
+                source_ids=[latest_encounter.id],
+                support_status="supported",
+            )
+        )
+        response_sources.append(latest_encounter)
+    else:
+        answer_parts.append("Last visit was not found in retrieved encounter records; verify in chart.")
+        warnings.append(
+            WarningItem(
+                code="no_encounter_evidence_selected",
+                message="No encounter records were selected for this last-visit question.",
+            )
+        )
+
+    return AgentForgeResponse(
+        answer=" ".join(answer_parts),
+        sections=[
+            ResponseSection(
+                id="chart-identity-visit-history",
+                title="Chart Identity and Visit History",
+                claim_ids=[claim.id for claim in claims],
+            )
+        ] if claims else [],
+        claims=claims,
+        sources=[_response_source_from_evidence(source) for source in response_sources],
+        warnings=warnings,
+        blocked_claims=[],
+        verification_status="verified" if latest_encounter is not None else "partial",
+        trace_id=trace_id,
+        debug_trace={
+            "deterministic_answer": {
+                "reason": "chart_identity_latest_encounter_lookup",
+                "source_ids": [source.id for source in response_sources],
+            }
+        },
+    )
+
+
+def _chart_name_source(sources: list[EvidenceSource]) -> EvidenceSource | None:
+    for source in sources:
+        if source.record_type != "demographic":
+            continue
+        if source.field_path.lower() == "patient_data.fname_lname":
+            return source
+    return None
+
+
+def _asks_name_or_identity(message: str) -> bool:
+    normalized = " ".join(message.lower().split())
+    return any(term in normalized for term in ("name", "who is", "identity", "identify"))
+
+
+def _latest_encounter_source(sources: list[EvidenceSource]) -> EvidenceSource | None:
+    encounters = [source for source in sources if source.record_type == "encounter"]
+    if not encounters:
+        return None
+    return sorted(encounters, key=lambda source: (source.recorded_at, source.id), reverse=True)[0]
+
+
+def _encounter_source_label(source: EvidenceSource) -> str:
+    parts = [part.strip() for part in source.value.split(";") if part.strip()]
+    if not parts:
+        return source.recorded_at
+
+    date_text = parts[0].replace("T", " ").split(" ")[0]
+    if len(parts) == 1:
+        return date_text
+
+    title = parts[1]
+    if len(parts) == 2:
+        return f"{date_text} - {title}"
+
+    reason = parts[2]
+    if reason.lower() == title.lower():
+        return f"{date_text} - {title}"
+    return f"{date_text} - {title}; reason: {reason}"
+
+
 def _is_lab_like_source(source: EvidenceSource) -> bool:
     if source.record_type == "lab":
         return True
@@ -1215,6 +1342,10 @@ def _is_direct_document_fact_lookup(
         for term in (
             "phone",
             "contact",
+            "name",
+            "patient name",
+            "legal name",
+            "full name",
             "pharmacy",
             "medication",
             "medications",
@@ -1222,6 +1353,10 @@ def _is_direct_document_fact_lookup(
             "medication list",
             "address",
             "email",
+            "dob",
+            "date of birth",
+            "birth date",
+            "birthday",
             "insurance",
             "policy",
             "signature",
@@ -1246,9 +1381,28 @@ def _direct_document_fact_answer(message: str, document_sources: list[EvidenceSo
 
     facts = []
     for source in document_sources:
-        label, value = _document_fact_label_value(source)
+        label, value = _direct_source_label_value(source)
         facts.append(f"{label}: {value}")
     return "; ".join(facts) + "."
+
+
+def _direct_document_fact_answer_sources(
+    request: AgentForgeRequest,
+    selected_sources: list[EvidenceSource],
+    document_sources: list[EvidenceSource],
+    groups: set[str],
+) -> list[EvidenceSource]:
+    if groups or not _asks_identity_fields(request.message):
+        return document_sources
+
+    direct_sources: list[EvidenceSource] = []
+    for field in _requested_identity_fields(request.message):
+        source = _first_source_by_identity_field(document_sources, field)
+        if source is None:
+            source = _first_source_by_identity_field(selected_sources, field)
+        if source is not None and source.id not in {item.id for item in direct_sources}:
+            direct_sources.append(source)
+    return direct_sources or document_sources
 
 
 def _first_source_by_field(sources: list[EvidenceSource], field: str) -> EvidenceSource | None:
@@ -1256,6 +1410,53 @@ def _first_source_by_field(sources: list[EvidenceSource], field: str) -> Evidenc
         if _normalized_field_key(source) == field:
             return source
     return None
+
+
+def _first_source_by_identity_field(sources: list[EvidenceSource], field: str) -> EvidenceSource | None:
+    for source in sources:
+        if _identity_field_key(source) == field:
+            return source
+    return None
+
+
+def _asks_identity_fields(message: str) -> bool:
+    return bool(_requested_identity_fields(message))
+
+
+def _requested_identity_fields(message: str) -> list[str]:
+    normalized = " ".join(message.lower().split())
+    fields: list[str] = []
+    if any(term in normalized for term in ("name", "who is", "identify the patient")):
+        fields.append("name")
+    if any(term in normalized for term in ("dob", "date of birth", "birth date", "birthday")):
+        fields.append("date_of_birth")
+    if any(term in normalized for term in ("sex", "gender")):
+        fields.append("sex")
+    return fields
+
+
+def _identity_field_key(source: EvidenceSource) -> str:
+    if source.record_type == "document_fact":
+        return _normalized_field_key(source)
+    if source.record_type != "demographic":
+        return ""
+    field_path = source.field_path.lower()
+    if field_path.endswith(".fname_lname") or "fname_lname" in field_path:
+        return "name"
+    if field_path.endswith(".dob") or ".dob" in field_path:
+        return "date_of_birth"
+    if field_path.endswith(".sex") or ".sex" in field_path:
+        return "sex"
+    return ""
+
+
+def _direct_source_label_value(source: EvidenceSource) -> tuple[str, str]:
+    field_key = _identity_field_key(source)
+    if field_key in IDENTITY_FIELD_LABELS:
+        if source.record_type == "document_fact":
+            return IDENTITY_FIELD_LABELS[field_key], _document_fact_label_value(source)[1]
+        return IDENTITY_FIELD_LABELS[field_key], source.value.strip()
+    return _document_fact_label_value(source)
 
 
 def _document_fact_label_value(source: EvidenceSource) -> tuple[str, str]:
@@ -1587,6 +1788,13 @@ def _model_adapter_status(request: AgentForgeRequest, evidence_plan: EvidencePla
             if status.adapter in {"labs", "agentforge_documents"}
         ]
         return scoped or request.evidence_bundle.adapter_status
+    if evidence_plan.answer_family == "visit_history":
+        scoped = [
+            status
+            for status in request.evidence_bundle.adapter_status
+            if status.adapter in {"patient_snapshot", "encounters"}
+        ]
+        return scoped or request.evidence_bundle.adapter_status
     return request.evidence_bundle.adapter_status
 
 
@@ -1647,10 +1855,24 @@ def _field_alias(raw: str) -> str:
         "emergencycontactphone": "emergency_contact_phone",
         "emergencycontactrelationship": "emergency_contact_relationship",
         "relationshiptopatient": "emergency_contact_relationship",
+        "name": "name",
+        "patientname": "name",
+        "legalname": "name",
+        "fullname": "name",
+        "patientdemographicsname": "name",
         "patientphone": "patient_phone",
         "phone": "phone",
         "pharmacyphone": "pharmacy_phone",
         "phonenumber": "phone",
+        "dob": "date_of_birth",
+        "dateofbirth": "date_of_birth",
+        "birthdate": "date_of_birth",
+        "birthday": "date_of_birth",
+        "patientdemographicsdob": "date_of_birth",
+        "patientdemographicsdateofbirth": "date_of_birth",
+        "sex": "sex",
+        "gender": "sex",
+        "patientdemographicssex": "sex",
     }
     return aliases.get(normalized, raw.strip().lower())
 

@@ -705,7 +705,68 @@ final class AgentForgeChartWritebackService
 
     private function isLabFact(array $fact): bool
     {
-        return !$this->matchesAny($this->factKeys($fact), ['uploaded_lab_pdf']);
+        $keys = $this->factKeys($fact);
+        if ($this->matchesAny($keys, [
+            'uploaded_lab_pdf',
+            'address',
+            'patient_address',
+            'dob',
+            'date_of_birth',
+            'mrn',
+            'name',
+            'legal_name',
+            'ordering_provider',
+            'provider',
+            'patient_phone',
+            'phone',
+            'report_date',
+            'sex',
+            'specimen_type',
+            'status',
+            'accession',
+            'loinc',
+            'interpretation',
+        ])) {
+            return false;
+        }
+
+        if (
+            trim((string)($fact['unit'] ?? '')) !== ''
+            || trim((string)($fact['reference_range'] ?? '')) !== ''
+            || trim((string)($fact['abnormal_flag'] ?? '')) !== ''
+        ) {
+            return true;
+        }
+
+        return $this->matchesAny($keys, [
+            'albumin',
+            'alkaline_phosphatase',
+            'alt',
+            'ast',
+            'bilirubin',
+            'bun',
+            'calcium',
+            'chloride',
+            'co2',
+            'creatinine',
+            'egfr',
+            'glucose',
+            'hematocrit',
+            'hemoglobin',
+            'lymphocyte',
+            'mcv',
+            'metamyelocyte',
+            'monocyte',
+            'neutrophil',
+            'platelet',
+            'potassium',
+            'promyelocyte',
+            'rbc',
+            'sodium',
+            'total_protein',
+            'undifferentiated_blast',
+            'wbc',
+        ]);
     }
 
     private function sourceNote(int $agentforgeDocumentId, array $fact): string

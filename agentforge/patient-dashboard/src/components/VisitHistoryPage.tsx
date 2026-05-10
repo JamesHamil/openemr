@@ -38,7 +38,7 @@ export function VisitHistoryPage({ data }: { data: VisitHistoryData }) {
       const parentWindow = window.parent as OpenEmrNavigationWindow;
       window.top?.restoreSession?.();
       parentWindow.left_nav?.setEncounter?.(
-        encounter.reviewDate || encounter.startDate.slice(0, 10),
+        encounter.reviewDate || (encounter.startDate || '').slice(0, 10),
         encounter.encounterId,
         window.name
       );
@@ -56,8 +56,8 @@ export function VisitHistoryPage({ data }: { data: VisitHistoryData }) {
 
     if (encounter.sourceType === 'document' && encounter.documentId && data.documentBaseUrl) {
       const params = new URLSearchParams({
-        doc_id: encounter.documentId,
         patient_id: data.patient.id,
+        doc_id: encounter.documentId,
       });
       window.top?.restoreSession?.();
       window.location.href = `${data.documentBaseUrl}?document&view&${params.toString()}`;

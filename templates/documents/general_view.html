@@ -484,7 +484,8 @@ function saveAgentForgeFacts(docid, patientId) {
         renderAgentForgeExtractionPreview(payload);
         let savedFacts = (payload.extraction && payload.extraction.extracted_facts) || [];
         status.removeClass('text-muted text-danger text-warning').addClass('text-success').text(
-            {xlj t='Saved AgentForge facts:'} + ' ' + savedFacts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'}
+            {xlj t='Saved AgentForge facts:'} + ' ' + savedFacts.length + ' ' + {xlj t='fact(s) available for Clinical Co-Pilot.'} +
+            formatAgentForgeChartWritebackSummary(payload)
         );
     }).catch(function () {
         status.removeClass('text-muted text-success text-warning').addClass('text-danger').text({xlj t='Unable to save AgentForge facts.'});
@@ -516,7 +517,7 @@ function formatAgentForgeConfidence(confidence) {
     return Math.round(numeric * 100) + '%';
 }
 
-function formatAgentForgeCitation(citation) {
+function formatAgentForgeCitation(citation, omitBoundingBox) {
     let parts = [];
     if (citation.page_or_section) {
         parts.push(citation.page_or_section);
@@ -527,7 +528,7 @@ function formatAgentForgeCitation(citation) {
     if (citation.quote_or_value) {
         parts.push('"' + citation.quote_or_value + '"');
     }
-    if (citation.bounding_box) {
+    if (!omitBoundingBox && citation.bounding_box) {
         let box = citation.bounding_box;
         parts.push('box ' + ['x', 'y', 'width', 'height'].map(function (key) {
             let value = Number(box[key]);
@@ -546,6 +547,22 @@ function hasAgentForgeBoundingBox(citation) {
         let value = Number(box[key]);
         return Number.isFinite(value) && value >= 0 && value <= 1;
     }) && Number(box.width) > 0 && Number(box.height) > 0;
+}
+
+function isAgentForgeSuspiciousIntakeImageBox(fact, citation, sourceType) {
+    if (sourceType !== 'intake_form' || !hasAgentForgeBoundingBox(citation)) {
+        return false;
+    }
+    let factKey = normalizeAgentForgeText([
+        citation.field_or_chunk_id || '',
+        fact.fact_type || '',
+        fact.label || '',
+        citation.quote_or_value || ''
+    ].join(' '));
+    if (!/(name|dob|dateofbirth|birth|mrn|sex|gender|race|ethnicity|email)/.test(factKey)) {
+        return false;
+    }
+    return Number(citation.bounding_box.y) > 0.38;
 }
 
 function normalizeAgentForgeMime(value) {
@@ -672,16 +689,22 @@ function renderAgentForgeImageCitation(fact, index) {
     let image = $('<img class="agentforge-citation-image" alt="">');
     let pageNode = $('<div class="agentforge-citation-page"></div>');
     image.on('load', function () {
-        let rowBox = resolveAgentForgeImageRowBox(image[0], fact, index);
-        let modelBox = hasAgentForgeBoundingBox(citation) ? citation.bounding_box : null;
-        let highlightBox = rowBox || modelBox;
+        stage.scrollTop(0).scrollLeft(0);
+        let sourceType = agentForgeCitationSourceType(fact);
+        let storedBox = hasAgentForgeBoundingBox(citation) &&
+            !isAgentForgeSuspiciousIntakeImageBox(fact, citation, sourceType) ?
+            citation.bounding_box : null;
+        let rowBox = sourceType === 'medication_list' && storedBox ? null : resolveAgentForgeImageRowBox(image[0], fact, index);
+        let highlightBox = sourceType === 'medication_list' ? (storedBox || rowBox) : (rowBox || storedBox);
         if (highlightBox) {
-            addAgentForgeHighlight(pageNode, highlightBox, rowBox ? 'row' : 'model');
+            let highlightSource = highlightBox === rowBox ? 'row' : 'stored';
+            addAgentForgeHighlight(pageNode, highlightBox, highlightSource === 'row' ? 'row' : 'model');
             $('#agentforgeCitationStatus').text(
-                formatAgentForgeCitation(citation) + (rowBox ? ' | UI row-aligned highlight' : ' | model-provided highlight')
+                formatAgentForgeCitation(citation, highlightSource === 'row') +
+                (highlightSource === 'row' ? ' | UI image-aligned highlight' : ' | stored row highlight')
             );
         } else {
-            $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation));
+            $('#agentforgeCitationStatus').text(formatAgentForgeCitation(citation, true) + ' | image rendered; exact location was not found');
         }
     });
     image.on('error', function () {
@@ -693,9 +716,12 @@ function renderAgentForgeImageCitation(fact, index) {
 }
 
 function resolveAgentForgeImageRowBox(imageElement, fact, index) {
-    let rowIndex = extractAgentForgeMedicationRowIndex(fact, index);
+    let rowIndex = extractAgentForgeImageRowIndex(fact, index);
     if (rowIndex < 1 || !imageElement || !imageElement.naturalWidth || !imageElement.naturalHeight) {
-        return null;
+        return fallbackAgentForgeImageRowBox(fact, index);
+    }
+    if (agentForgeCitationSourceType(fact) === 'medication_list') {
+        return fallbackAgentForgeImageRowBox(fact, index);
     }
 
     try {
@@ -705,13 +731,20 @@ function resolveAgentForgeImageRowBox(imageElement, fact, index) {
         let context = canvas.getContext('2d', {ldelim}willReadFrequently: true{rdelim});
         context.drawImage(imageElement, 0, 0, canvas.width, canvas.height);
         let imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        let clusters = detectAgentForgeInkRowClusters(imageData, canvas.width, canvas.height);
-        if (!clusters.length) {
+        let sectionBox = resolveAgentForgeImageSectionBox(imageData, canvas.width, canvas.height, fact, index);
+        if (sectionBox) {
+            return sectionBox;
+        }
+        if (agentForgeCitationSourceType(fact) === 'intake_form') {
             return null;
         }
-        let cluster = clusters[rowIndex] || clusters[rowIndex - 1] || null;
+        let clusters = detectAgentForgeInkRowClusters(imageData, canvas.width, canvas.height);
+        if (!clusters.length) {
+            return fallbackAgentForgeImageRowBox(fact, index);
+        }
+        let cluster = selectAgentForgeImageRowCluster(clusters, fact, rowIndex, canvas.height);
         if (!cluster) {
-            return null;
+            return fallbackAgentForgeImageRowBox(fact, index);
         }
         let padY = Math.max(2, Math.round(canvas.height * 0.006));
         let y = Math.max(0, cluster.start - padY);
@@ -723,16 +756,17 @@ function resolveAgentForgeImageRowBox(imageElement, fact, index) {
             height: Math.max(height / canvas.height, 0.025)
         {rdelim};
     } catch (e) {
-        return null;
+        return fallbackAgentForgeImageRowBox(fact, index);
     }
 }
 
-function extractAgentForgeMedicationRowIndex(fact, index) {
+function extractAgentForgeImageRowIndex(fact, index) {
     let citation = fact.citation || {};
     let candidates = [
         citation.field_or_chunk_id || '',
         fact.fact_type || '',
-        fact.label || ''
+        fact.label || '',
+        citation.quote_or_value || ''
     ];
     for (let i = 0; i < candidates.length; i++) {
         let match = String(candidates[i]).match(/medication[_-](\d+)/i);
@@ -741,6 +775,230 @@ function extractAgentForgeMedicationRowIndex(fact, index) {
         }
     }
     return Number(index) + 1;
+}
+
+function selectAgentForgeImageRowCluster(clusters, fact, rowIndex, imageHeight) {
+    let citation = fact.citation || {};
+    let sourceType = agentForgeCitationSourceType(fact);
+    let factKey = normalizeAgentForgeText([
+        citation.field_or_chunk_id || '',
+        fact.fact_type || '',
+        fact.label || '',
+        citation.quote_or_value || ''
+    ].join(' '));
+    let usableClusters = clusters.filter(function (cluster) {
+        return cluster.start > Math.floor(imageHeight * 0.12);
+    });
+    if (!usableClusters.length) {
+        usableClusters = clusters;
+    }
+
+    if (sourceType === 'intake_form' || hasAgentForgeKnownImageAnchor(factKey)) {
+        let y = fallbackAgentForgeImageY(factKey, rowIndex - 1);
+        let target = y * imageHeight;
+        return usableClusters.reduce(function (closest, cluster) {
+            let center = (cluster.start + cluster.end) / 2;
+            if (!closest || Math.abs(center - target) < Math.abs(((closest.start + closest.end) / 2) - target)) {
+                return cluster;
+            }
+            return closest;
+        }, null);
+    }
+
+    return usableClusters[rowIndex - 1] || usableClusters[rowIndex] || null;
+}
+
+function resolveAgentForgeImageSectionBox(imageData, width, height, fact, index) {
+    let citation = fact.citation || {};
+    let factKey = normalizeAgentForgeText([
+        citation.field_or_chunk_id || '',
+        fact.fact_type || '',
+        fact.label || '',
+        citation.quote_or_value || ''
+    ].join(' '));
+    let sectionRows = detectAgentForgeRedSectionRows(imageData, width, height);
+    if (!sectionRows.length) {
+        return null;
+    }
+
+    let rowNumber = agentForgeImageSectionRowNumber(factKey, index);
+    if (rowNumber < 1) {
+        return null;
+    }
+    let demographics = sectionRows[0];
+    let nextSection = sectionRows.length > 1 ? sectionRows[1].start : Math.floor(height * 0.72);
+    let availableHeight = Math.max(1, nextSection - demographics.end);
+    let rowHeight = Math.max(Math.floor(height * 0.035), Math.min(Math.floor(height * 0.06), Math.floor(availableHeight / 6)));
+    let y = demographics.end + Math.floor(rowHeight * 0.18) + ((rowNumber - 1) * rowHeight);
+    return {ldelim}
+        x: 0.06,
+        y: Math.max(0, y / height),
+        width: 0.88,
+        height: Math.max(0.026, Math.min(0.055, (rowHeight * 0.78) / height))
+    {rdelim};
+}
+
+function agentForgeImageSectionRowNumber(factKey, index) {
+    if (/name|dob|dateofbirth|birth|mrn/.test(factKey)) {
+        return 1;
+    }
+    if (/sex|gender/.test(factKey)) {
+        return 2;
+    }
+    if (/race|ethnicity/.test(factKey)) {
+        return 3;
+    }
+    if (/email/.test(factKey)) {
+        return 4;
+    }
+    if (/phone/.test(factKey)) {
+        return 5;
+    }
+    if (/address/.test(factKey)) {
+        return 6;
+    }
+    if (/occupation/.test(factKey)) {
+        return 7;
+    }
+    if (Number(index) >= 0 && Number(index) <= 6) {
+        return Number(index) + 1;
+    }
+    return 0;
+}
+
+function detectAgentForgeRedSectionRows(imageData, width, height) {
+    let rows = [];
+    let data = imageData.data;
+    let threshold = Math.max(10, Math.floor(width * 0.012));
+    for (let y = 0; y < height; y += 1) {
+        let redPixels = 0;
+        let minX = width;
+        let maxX = 0;
+        for (let x = 0; x < width; x += 2) {
+            let offset = ((y * width) + x) * 4;
+            let alpha = data[offset + 3];
+            if (alpha < 20) {
+                continue;
+            }
+            let red = data[offset];
+            let green = data[offset + 1];
+            let blue = data[offset + 2];
+            if (red > 70 && red > green * 1.12 && red > blue * 1.12 && red - Math.max(green, blue) > 18) {
+                redPixels++;
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+            }
+        }
+        if (redPixels >= threshold) {
+            rows.push({ldelim}y: y, minX: minX, maxX: maxX, count: redPixels{rdelim});
+        }
+    }
+    if (!rows.length) {
+        return [];
+    }
+    let clusters = [];
+    let start = rows[0].y;
+    let previous = rows[0].y;
+    let minX = rows[0].minX;
+    let maxX = rows[0].maxX;
+    let maxCount = rows[0].count;
+    rows.slice(1).forEach(function (row) {
+        if (row.y - previous > Math.max(3, Math.floor(height * 0.006))) {
+            clusters.push({ldelim}start: start, end: previous, minX: minX, maxX: maxX, maxCount: maxCount{rdelim});
+            start = row.y;
+            minX = row.minX;
+            maxX = row.maxX;
+            maxCount = row.count;
+        } else {
+            minX = Math.min(minX, row.minX);
+            maxX = Math.max(maxX, row.maxX);
+            maxCount = Math.max(maxCount, row.count);
+        }
+        previous = row.y;
+    });
+    clusters.push({ldelim}start: start, end: previous, minX: minX, maxX: maxX, maxCount: maxCount{rdelim});
+    return clusters.filter(function (cluster) {
+        let clusterHeight = cluster.end - cluster.start;
+        let clusterWidth = cluster.maxX - cluster.minX;
+        return clusterHeight >= Math.max(6, Math.floor(height * 0.006)) &&
+            clusterWidth >= Math.floor(width * 0.3) &&
+            cluster.start > Math.floor(height * 0.16);
+    }).sort(function (left, right) {
+        return left.start - right.start;
+    });
+}
+
+function fallbackAgentForgeImageRowBox(fact, index) {
+    let citation = fact.citation || {};
+    let sourceType = agentForgeCitationSourceType(fact);
+    if (sourceType === 'medication_list') {
+        return {ldelim}
+            x: 0.06,
+            y: Math.min(0.9, 0.17 + (Number(index) * 0.046)),
+            width: 0.88,
+            height: 0.042
+        {rdelim};
+    }
+    let factKey = normalizeAgentForgeText([
+        citation.field_or_chunk_id || '',
+        fact.fact_type || '',
+        fact.label || '',
+        citation.quote_or_value || ''
+    ].join(' '));
+    if (sourceType !== 'intake_form' && !hasAgentForgeKnownImageAnchor(factKey)) {
+        return null;
+    }
+
+    return {ldelim}
+        x: 0.06,
+        y: fallbackAgentForgeImageY(factKey, index),
+        width: 0.88,
+        height: 0.04
+    {rdelim};
+}
+
+function agentForgeCitationSourceType(fact) {
+    let payloadType = agentForgeCurrentPayload && agentForgeCurrentPayload.document ?
+        String(agentForgeCurrentPayload.document.document_type || '').toLowerCase() : '';
+    let citationType = fact && fact.citation ? String(fact.citation.source_type || '').toLowerCase() : '';
+    return payloadType || citationType;
+}
+
+function hasAgentForgeKnownImageAnchor(factKey) {
+    return fallbackAgentForgeImageY(factKey, -1) !== null;
+}
+
+function fallbackAgentForgeImageY(factKey, index) {
+    let rowAnchors = [
+        {ldelim}pattern: /patientdemographics(name|dob|mrn)/, y: 0.12{rdelim},
+        {ldelim}pattern: /patientdemographics(sex|gender)/, y: 0.17{rdelim},
+        {ldelim}pattern: /patientdemographics(race|ethnicity)/, y: 0.22{rdelim},
+        {ldelim}pattern: /patientcontactemail/, y: 0.27{rdelim},
+        {ldelim}pattern: /patientcontactphone/, y: 0.32{rdelim},
+        {ldelim}pattern: /patientcontactaddress/, y: 0.37{rdelim},
+        {ldelim}pattern: /problemlist|pmh|condition/, y: 0.25{rdelim},
+        {ldelim}pattern: /currentmedications|medication/, y: 0.5{rdelim},
+        {ldelim}pattern: /allerg/, y: 0.76{rdelim},
+        {ldelim}pattern: /emergency/, y: 0.79{rdelim},
+        {ldelim}pattern: /pharmacy/, y: 0.84{rdelim},
+        {ldelim}pattern: /occupation/, y: 0.74{rdelim},
+        {ldelim}pattern: /address/, y: 0.69{rdelim},
+        {ldelim}pattern: /phone/, y: 0.64{rdelim},
+        {ldelim}pattern: /email/, y: 0.59{rdelim},
+        {ldelim}pattern: /race|ethnicity/, y: 0.54{rdelim},
+        {ldelim}pattern: /sex|gender/, y: 0.49{rdelim},
+        {ldelim}pattern: /dob|dateofbirth|birth/, y: 0.43{rdelim},
+        {ldelim}pattern: /name|legalname/, y: 0.43{rdelim}
+    ];
+    for (let i = 0; i < rowAnchors.length; i++) {
+        if (rowAnchors[i].pattern.test(factKey)) {
+            return rowAnchors[i].y;
+        }
+    }
+    if (Number(index) < 0) {
+        return null;
+    }
+    return Math.min(0.9, 0.43 + (Number(index) * 0.045));
 }
 
 function detectAgentForgeInkRowClusters(imageData, width, height) {
@@ -780,7 +1038,17 @@ function detectAgentForgeInkRowClusters(imageData, width, height) {
         previous = row;
     });
     clusters.push({ldelim}start: start, end: previous{rdelim});
-    return clusters.filter(function (cluster) {
+    let merged = [];
+    let mergeGap = Math.max(4, Math.floor(height * 0.012));
+    clusters.forEach(function (cluster) {
+        let previous = merged[merged.length - 1];
+        if (previous && cluster.start - previous.end <= mergeGap) {
+            previous.end = cluster.end;
+        } else {
+            merged.push({ldelim}start: cluster.start, end: cluster.end{rdelim});
+        }
+    });
+    return merged.filter(function (cluster) {
         return (cluster.end - cluster.start) >= 3 && cluster.start > Math.floor(height * 0.05);
     }).sort(function (left, right) {
         return left.start - right.start;
@@ -1203,6 +1471,7 @@ function extractWithAgentForge(docid, patientId) {
     border: 2px solid #ffc107;
     box-shadow: 0 0 0 2px rgba(33, 37, 41, 0.2);
     position: absolute;
+    z-index: 2;
 }
 
 .agentforge-citation-highlight-text {

@@ -571,6 +571,103 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertIn("Lisinopril: Lisinopril 10 mg daily", response.answer)
         self.assertIn("Metformin: Metformin 500 mg by mouth twice daily", response.answer)
 
+    def test_openai_response_answers_birthday_from_saved_document_fact(self):
+        request = _request().model_copy(update={"message": "what is this patient's birthday?"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="patient-dob-8",
+                        record_type="demographic",
+                        recorded_at="2026-05-10T13:25:58Z",
+                        field_path="patient_data.DOB",
+                        value="1971-06-08",
+                    ),
+                    EvidenceSource(
+                        id="document-fact-799",
+                        record_type="document_fact",
+                        recorded_at="2026-05-10T13:26:00Z",
+                        field_path="agentforge_extracted_facts.demographic",
+                        value="Date of Birth; 06/08/1963",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"patient_demographics_dob","page_or_section":"Page 1"}',
+                        },
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(diagnostics.model_call_count, 0)
+        self.assertEqual(diagnostics.source_selection_mode, "planner")
+        self.assertEqual([source.id for source in response.sources], ["document-fact-799"])
+        self.assertEqual(response.answer, "Date of Birth: 06/08/1963.")
+
+    def test_openai_response_answers_name_and_birthday_from_saved_document_facts(self):
+        request = _request().model_copy(update={"message": "what is this patient's name and birthday?"})
+        bundle = request.evidence_bundle.model_copy(
+            update={
+                "sources": [
+                    EvidenceSource(
+                        id="patient-name-8",
+                        record_type="demographic",
+                        recorded_at="2026-05-10T13:25:58Z",
+                        field_path="patient_data.fname_lname",
+                        value="Adam J. Kowalski",
+                    ),
+                    EvidenceSource(
+                        id="patient-dob-8",
+                        record_type="demographic",
+                        recorded_at="2026-05-10T13:25:58Z",
+                        field_path="patient_data.DOB",
+                        value="1971-06-08",
+                    ),
+                    EvidenceSource(
+                        id="document-fact-862",
+                        record_type="document_fact",
+                        recorded_at="2026-05-10T13:26:00Z",
+                        field_path="agentforge_extracted_facts.demographic",
+                        value="Name; Adam J. Kowalski",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"patient_demographics_name","page_or_section":"Page 1"}',
+                        },
+                    ),
+                    EvidenceSource(
+                        id="document-fact-863",
+                        record_type="document_fact",
+                        recorded_at="2026-05-10T13:26:00Z",
+                        field_path="agentforge_extracted_facts.demographic",
+                        value="Date of Birth; 06/08/1971",
+                        metadata={
+                            "document_type": "intake_form",
+                            "citation": '{"field_or_chunk_id":"patient_demographics_dob","page_or_section":"Page 1"}',
+                        },
+                    ),
+                ],
+                "adapter_status": [AdapterStatus(adapter="agentforge_documents", status="success")],
+            }
+        )
+        request = request.model_copy(update={"evidence_bundle": bundle})
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(diagnostics.model_call_count, 0)
+        self.assertEqual([source.id for source in response.sources], ["document-fact-862", "document-fact-863"])
+        self.assertEqual(response.answer, "Name: Adam J. Kowalski; Date of Birth: 06/08/1971.")
+
     def test_med_reconciliation_prefers_chart_prescriptions_after_writeback(self):
         request = _request().model_copy(update={"message": "What medications is this patient on?"})
         document_sources = [
@@ -666,6 +763,70 @@ class OpenAIProviderTest(unittest.TestCase):
         self.assertEqual(len(response.sources), 19)
         self.assertIn("Medication 16", response.answer)
         self.assertIn("Prescription 3", response.answer)
+
+    def test_openai_response_answers_name_and_last_visit_from_chart_without_model(self):
+        request = _request().model_copy(update={"message": "What is this patient's name? When was their last visit?"})
+        request = request.model_copy(
+            update={
+                "evidence_bundle": request.evidence_bundle.model_copy(
+                    update={
+                        "sources": [
+                            EvidenceSource(
+                                id="patient-name-5",
+                                record_type="demographic",
+                                recorded_at="2026-05-10T14:00:00Z",
+                                field_path="patient_data.fname_lname",
+                                value="Big ol Bob",
+                            ),
+                            EvidenceSource(
+                                id="document-fact-1112",
+                                record_type="document_fact",
+                                recorded_at="2026-05-10T14:05:00Z",
+                                field_path="agentforge_extracted_facts.demographic",
+                                value="Name; Sofia M. Reyes",
+                                metadata={"document_type": "intake_form"},
+                            ),
+                            EvidenceSource(
+                                id="encounter-20190130",
+                                record_type="encounter",
+                                recorded_at="2019-01-30 00:00:00",
+                                field_path="form_encounter.date_reason",
+                                value="2019-01-30; Follow-up encounter",
+                            ),
+                            EvidenceSource(
+                                id="encounter-20190501",
+                                record_type="encounter",
+                                recorded_at="2019-05-01 00:00:00",
+                                field_path="form_encounter.date_reason",
+                                value="2019-05-01; General examination of patient (procedure)",
+                            ),
+                        ],
+                        "adapter_status": [
+                            AdapterStatus(adapter="patient_snapshot", status="success"),
+                            AdapterStatus(adapter="encounters", status="success"),
+                            AdapterStatus(adapter="agentforge_documents", status="success"),
+                        ],
+                    }
+                )
+            }
+        )
+        client = _FakeClient([])
+        openai_module = SimpleNamespace(OpenAI=lambda: client)
+
+        with patch.dict("sys.modules", {"openai": openai_module}):
+            with patch("agentforge_sidecar.openai_provider.run_tool_phase") as run_tool_phase:
+                response, diagnostics = openai_response(request, "trace-test", Settings(mode="real"))
+
+        run_tool_phase.assert_not_called()
+        self.assertEqual(len(client.responses.parse_calls), 0)
+        self.assertEqual(response.verification_status, "verified")
+        self.assertEqual(diagnostics.source_selection_mode, "planner")
+        self.assertEqual(diagnostics.model_call_count, 0)
+        self.assertIn("Big ol Bob", response.answer)
+        self.assertIn("2019-05-01", response.answer)
+        self.assertNotIn("Sofia M. Reyes", response.answer)
+        self.assertEqual([source.id for source in response.sources], ["patient-name-5", "encounter-20190501"])
+        self.assertEqual(response.debug_trace["provider"]["answer_family"], "visit_history")
 
     def test_openai_response_intake_summary_skips_tool_phase_and_keeps_compose_payload_narrow(self):
         request = _request().model_copy(update={"message": "I need to know about this patient's intake form"})

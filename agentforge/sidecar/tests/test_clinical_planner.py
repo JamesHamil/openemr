@@ -341,6 +341,57 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(list(plan.selected_source_ids), ["note-2", "note-1"])
         self.assertEqual(plan.required_adapters, ("recent_notes",))
 
+    def test_name_and_last_visit_prompt_uses_chart_identity_and_encounters(self):
+        request = _request(
+            "What is this patient's name? When was their last visit?",
+            [
+                EvidenceSource(
+                    id="patient-name-5",
+                    record_type="demographic",
+                    recorded_at="2026-05-10T14:00:00Z",
+                    field_path="patient_data.fname_lname",
+                    value="Big ol Bob",
+                ),
+                EvidenceSource(
+                    id="document-fact-1112",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T14:05:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Name; Sofia M. Reyes",
+                    metadata={"document_type": "intake_form"},
+                ),
+                EvidenceSource(
+                    id="encounter-20190130",
+                    record_type="encounter",
+                    recorded_at="2019-01-30 00:00:00",
+                    field_path="form_encounter.date_reason",
+                    value="2019-01-30; Follow-up encounter",
+                ),
+                EvidenceSource(
+                    id="encounter-20190501",
+                    record_type="encounter",
+                    recorded_at="2019-05-01 00:00:00",
+                    field_path="form_encounter.date_reason",
+                    value="2019-05-01; General examination of patient (procedure)",
+                ),
+            ],
+            [
+                AdapterStatus(adapter="patient_snapshot", status="success"),
+                AdapterStatus(adapter="encounters", status="success"),
+                AdapterStatus(adapter="agentforge_documents", status="success"),
+            ],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "visit_history")
+        self.assertEqual(plan.answer_family, "visit_history")
+        self.assertEqual(plan.required_adapters, ("encounters",))
+        self.assertIn("patient-name-5", plan.selected_source_ids)
+        self.assertIn("encounter-20190501", plan.selected_source_ids)
+        self.assertIn("encounter-20190130", plan.selected_source_ids)
+        self.assertNotIn("document-fact-1112", plan.selected_source_ids)
+
     def test_intake_form_prompt_is_high_confidence_document_fact_plan(self):
         request = _request(
             "I need to know about this patient's intake form",
@@ -436,6 +487,108 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertEqual(plan.answer_family, "document_facts")
         self.assertGreaterEqual(plan.confidence, 0.9)
         self.assertEqual(list(plan.selected_source_ids), ["document-fact-102", "document-fact-101"])
+
+    def test_birthday_prompt_prefers_saved_document_dob_fact(self):
+        request = _request(
+            "what is this patient's birthday?",
+            [
+                EvidenceSource(
+                    id="patient-dob-8",
+                    record_type="demographic",
+                    recorded_at="2026-05-10T13:25:58Z",
+                    field_path="patient_data.DOB",
+                    value="1971-06-08",
+                ),
+                EvidenceSource(
+                    id="document-fact-799",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T13:26:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Date of Birth; 06/08/1963",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"patient_demographics_dob","page_or_section":"Page 1"}',
+                    },
+                ),
+                EvidenceSource(
+                    id="document-fact-800",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T13:26:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Email; robert@example.com",
+                    metadata={"document_type": "intake_form"},
+                ),
+            ],
+            [AdapterStatus(adapter="agentforge_documents", status="success")],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "document_facts")
+        self.assertIn("document-fact-799", plan.selected_source_ids)
+        self.assertIn("patient-dob-8", plan.selected_source_ids)
+        self.assertNotIn("document-fact-800", plan.selected_source_ids)
+
+    def test_name_and_birthday_prompt_selects_each_saved_document_field(self):
+        request = _request(
+            "what is this patient's name and birthday?",
+            [
+                EvidenceSource(
+                    id="patient-name-8",
+                    record_type="demographic",
+                    recorded_at="2026-05-10T13:25:58Z",
+                    field_path="patient_data.fname_lname",
+                    value="Adam J. Kowalski",
+                ),
+                EvidenceSource(
+                    id="patient-dob-8",
+                    record_type="demographic",
+                    recorded_at="2026-05-10T13:25:58Z",
+                    field_path="patient_data.DOB",
+                    value="1971-06-08",
+                ),
+                EvidenceSource(
+                    id="document-fact-862",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T13:26:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Name; Adam J. Kowalski",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"patient_demographics_name","page_or_section":"Page 1"}',
+                    },
+                ),
+                EvidenceSource(
+                    id="document-fact-863",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T13:26:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Date of Birth; 06/08/1971",
+                    metadata={
+                        "document_type": "intake_form",
+                        "citation": '{"field_or_chunk_id":"patient_demographics_dob","page_or_section":"Page 1"}',
+                    },
+                ),
+                EvidenceSource(
+                    id="document-fact-864",
+                    record_type="document_fact",
+                    recorded_at="2026-05-10T13:26:00Z",
+                    field_path="agentforge_extracted_facts.demographic",
+                    value="Email; adam@example.com",
+                    metadata={"document_type": "intake_form"},
+                ),
+            ],
+            [AdapterStatus(adapter="agentforge_documents", status="success")],
+        )
+
+        plan = plan_evidence(request)
+
+        self.assertEqual(classify_question(request.message), "document_facts")
+        self.assertIn("document-fact-862", plan.selected_source_ids)
+        self.assertIn("document-fact-863", plan.selected_source_ids)
+        self.assertIn("patient-name-8", plan.selected_source_ids)
+        self.assertIn("patient-dob-8", plan.selected_source_ids)
+        self.assertNotIn("document-fact-864", plan.selected_source_ids)
 
     def test_lab_pdf_prompt_selects_extracted_lab_facts_without_lab_adapter(self):
         request = _request(

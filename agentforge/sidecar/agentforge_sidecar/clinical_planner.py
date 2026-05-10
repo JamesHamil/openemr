@@ -19,6 +19,7 @@ AnswerFamily = Literal[
     "change_since_review",
     "document_facts",
     "labs",
+    "visit_history",
     "broad_brief",
     "long_tail",
 ]
@@ -62,6 +63,8 @@ def classify_question(message: str) -> AnswerFamily:
         return "change_since_review"
     if "missing" in normalized or "before making clinical decisions" in normalized:
         return "missing_data"
+    if _is_visit_history_question(normalized):
+        return "visit_history"
     if _is_document_fact_question(normalized) and not _is_lab_question(normalized):
         return "document_facts"
     if "lab" in normalized or "labs" in normalized:
@@ -154,6 +157,7 @@ def _secondary_families(message: str, primary: AnswerFamily) -> tuple[AnswerFami
     add("cardiac", ("ascvd", "cardiac", "heart", "cardiovascular", "bp", "blood pressure"))
     add("endocrine_metabolic", ("endocrine", "metabolic", "cardiometabolic", "diabetes", "prediabetes", "lipid"))
     add("change_since_review", ("what changed", "changed since", "since last review", "trajectory", "overnight", "worse", "improved"))
+    add("visit_history", ("last visit", "last encounter", "recent visit", "most recent visit", "visit history", "encounter history", "last seen"))
     return tuple(secondary[:3])
 
 
@@ -192,6 +196,9 @@ def _is_document_fact_question(normalized: str) -> bool:
         "phone",
         "contact number",
         "emergency contact",
+        "patient name",
+        "legal name",
+        "full name",
         "preferred pharmacy",
         "pharmacy",
         "insurance",
@@ -201,6 +208,10 @@ def _is_document_fact_question(normalized: str) -> bool:
         "signed",
         "address",
         "email",
+        "dob",
+        "date of birth",
+        "birth date",
+        "birthday",
         "social history",
         "recreational drug",
         "recreational drugs",
@@ -211,6 +222,25 @@ def _is_document_fact_question(normalized: str) -> bool:
 
 def _is_lab_question(normalized: str) -> bool:
     return any(term in normalized for term in ("lab", "labs", "cbc", "blood count", "glucose", "creatinine", "a1c"))
+
+
+def _is_visit_history_question(normalized: str) -> bool:
+    return any(
+        term in normalized
+        for term in (
+            "last visit",
+            "last encounter",
+            "recent visit",
+            "most recent visit",
+            "latest visit",
+            "latest encounter",
+            "visit history",
+            "encounter history",
+            "last seen",
+            "when was their last visit",
+            "when was the last visit",
+        )
+    )
 
 
 def missing_required_adapters(request: AgentForgeRequest, plan: EvidencePlan | None = None) -> list[str]:
@@ -336,6 +366,17 @@ def _family_policy(
                 "If labs are unavailable, say abnormal labs were not found in retrieved lab records and confirm in the chart.",
             ),
         )
+    if family == "visit_history":
+        return (
+            ("encounters",),
+            (),
+            ("encounter", "demographic"),
+            (
+                "Use chart demographics for identity questions.",
+                "Use the newest selected encounter as the last visit.",
+                "Do not answer chart identity from extracted document facts unless the question explicitly asks about documents.",
+            ),
+        )
     if family == "document_facts":
         return (
             ("agentforge_documents",),
@@ -455,6 +496,10 @@ def _select_sources_for_family(
     elif family == "labs":
         add(_by_type(sources, "lab"))
         add(_lab_document_fact_sources(sources))
+    elif family == "visit_history":
+        if _asks_patient_identity(request.message):
+            add(_chart_demographic_sources(sources))
+        add(_by_type(sources, "encounter"))
     elif family == "document_facts":
         add(_document_fact_sources_for_message(request))
         if _asks_patient_identity(request.message):
@@ -474,6 +519,14 @@ def _has_medication_list_document_sources(sources: list[EvidenceSource]) -> bool
 
 def _by_type(sources: list[EvidenceSource], record_type: str) -> list[EvidenceSource]:
     return [source for source in sources if source.record_type.lower() == record_type]
+
+
+def _chart_demographic_sources(sources: list[EvidenceSource]) -> list[EvidenceSource]:
+    return [
+        source
+        for source in _by_type(sources, "demographic")
+        if source.field_path.lower().startswith("patient_data.")
+    ]
 
 
 def _problems_matching(sources: list[EvidenceSource], terms: tuple[str, ...]) -> list[EvidenceSource]:
@@ -592,18 +645,49 @@ def _document_fact_sources_for_message(request: AgentForgeRequest) -> list[Evide
             sources = intake_sources
 
     matched = [source for source in sources if _document_fact_matches_message(source, normalized)]
-    return matched or sources
+    if matched:
+        return matched
+    if _document_fact_query_topics(normalized):
+        return []
+    return sources
 
 
 def _document_fact_matches_message(source: EvidenceSource, normalized_message: str) -> bool:
+    query_topics = _document_fact_query_topics(normalized_message)
+    if not query_topics:
+        return True
+
+    haystack = _document_fact_haystack(source)
+    field_terms_by_topic = _document_fact_field_terms_by_topic()
+    return any(any(term in haystack for term in field_terms_by_topic[topic]) for topic in query_topics)
+
+
+def _document_fact_query_topics(normalized_message: str) -> set[str]:
+    field_terms_by_topic = _document_fact_field_terms_by_topic()
+    return {
+        topic
+        for topic in field_terms_by_topic
+        if topic in normalized_message
+    }
+
+
+def _document_fact_field_terms_by_topic() -> dict[str, tuple[str, ...]]:
     field_terms_by_topic = {
         "phone": ("phone", "number", "contact"),
         "contact": ("contact", "emergency"),
         "emergency": ("emergency", "contact"),
+        "patient name": ("name", "patient name", "legal name", "full name"),
+        "legal name": ("name", "patient name", "legal name", "full name"),
+        "full name": ("name", "patient name", "legal name", "full name"),
+        "name": ("name", "patient name", "legal name", "full name"),
         "pharmacy": ("pharmacy", "medimart"),
         "insurance": ("insurance", "policy", "group", "provider"),
         "signature": ("signature", "signed"),
         "date": ("date",),
+        "dob": ("dob", "date of birth", "birth date", "birthday"),
+        "date of birth": ("dob", "date of birth", "birth date", "birthday"),
+        "birth date": ("dob", "date of birth", "birth date", "birthday"),
+        "birthday": ("dob", "date of birth", "birth date", "birthday"),
         "address": ("address",),
         "email": ("email",),
         "medication": ("medication", "med", "dose", "dosage", "frequency", "route", "prescriber"),
@@ -612,16 +696,7 @@ def _document_fact_matches_message(source: EvidenceSource, normalized_message: s
         "alcohol": ("alcohol",),
         "recreational": ("recreational", "drug"),
     }
-    query_topics = {
-        topic
-        for topic in field_terms_by_topic
-        if topic in normalized_message
-    }
-    if not query_topics:
-        return True
-
-    haystack = _document_fact_haystack(source)
-    return any(any(term in haystack for term in field_terms_by_topic[topic]) for topic in query_topics)
+    return field_terms_by_topic
 
 
 def _document_fact_haystack(source: EvidenceSource) -> str:
@@ -661,6 +736,8 @@ def _asks_patient_identity(message: str) -> bool:
             "name",
             "dob",
             "date of birth",
+            "birth date",
+            "birthday",
             "sex",
             "gender",
             "demographic",

@@ -185,10 +185,12 @@ function generatePageElement($start, $pagesize, $billing, $issue, $text): void
 
 function agentforgeVisitHistoryAssetUrl(string $asset): string
 {
+    $assetVersion = (string) OEGlobalsBag::getInstance()->get('v_js_includes') . '-20260510-doc-param-order';
+
     return OEGlobalsBag::getInstance()->getWebRoot()
         . "/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets/"
         . rawurlencode($asset)
-        . "?v=" . rawurlencode((string) OEGlobalsBag::getInstance()->get('v_js_includes'));
+        . "?v=" . rawurlencode($assetVersion);
 }
 
 function agentforgeEncounterProviderName(array $encounter): string
@@ -449,8 +451,8 @@ function toencounter(rawdata) {
 
 function todocument(docid) {
   const params = new URLSearchParams({
-    doc_id: docid,
-    patient_id: <?php echo js_escape($pid); ?>
+    patient_id: <?php echo js_escape($pid); ?>,
+    doc_id: docid
   });
   h = '<?php echo OEGlobalsBag::getInstance()->getWebRoot() ?>/controller.php?document&view&' + params;
   top.restoreSession();
