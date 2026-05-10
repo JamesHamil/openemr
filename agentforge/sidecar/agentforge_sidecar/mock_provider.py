@@ -147,9 +147,9 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
             sentences.append(f"Current listed meds include {_join_values(meds)}.")
         if missing:
             sentences.append(
-                f"Key follow-up: confirm missing {', '.join(adapter.replace('_', ' ') for adapter in missing[:3])} in the chart."
+                f"Key follow-up: confirm missing {', '.join(adapter.replace('_', ' ') for adapter in missing)} in the chart."
             )
-        return " ".join(sentences[:5])
+        return " ".join(sentences)
 
     if "allerg" in normalized:
         if positive_allergies:
@@ -200,7 +200,7 @@ def _natural_answer(message: str, sources: list[ResponseSource], adapter_status)
 
     if "missing" in normalized:
         if missing:
-            return f"Missing or unavailable retrieved data includes {', '.join(adapter.replace('_', ' ') for adapter in missing[:4])}; confirm in chart before final decisions."
+            return f"Missing or unavailable retrieved data includes {', '.join(adapter.replace('_', ' ') for adapter in missing)}; confirm in chart before final decisions."
         return "Retrieved evidence appears complete for this bundle, but clinical decisions should still be confirmed in full chart context."
 
     return _focused_uncertainty_answer(message)

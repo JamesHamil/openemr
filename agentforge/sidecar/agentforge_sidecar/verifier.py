@@ -331,11 +331,8 @@ def _safe_answer_after_blocking(
             return _missing_data_answer_from_adapters(request, evidence_plan)
         return _focused_uncertainty_answer(request.message)
 
-    top_claims = claims[:3]
-    sentences = [_claim_sentence(claim) for claim in top_claims]
+    sentences = [_claim_sentence(claim) for claim in claims]
     answer = "Based on retrieved chart evidence, " + " ".join(sentences)
-    if len(claims) > len(top_claims):
-        answer += " Additional supported details are listed below."
     return answer
 
 

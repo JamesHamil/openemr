@@ -768,7 +768,7 @@ def _is_lab_question(message: str) -> bool:
 def _fallback_source_ids_for_plan(request: AgentForgeRequest, evidence_plan: EvidencePlan) -> list[str]:
     if evidence_plan.answer_family != "labs" and "labs" not in evidence_plan.needed_adapters:
         return []
-    matches = search_sources(request, request.message, ["lab"], None)
+    matches = search_sources(request, request.message, ["lab"])
     return [
         str(match["id"])
         for match in matches
@@ -1295,8 +1295,6 @@ def _sections_from_claims(claims: list[Claim]) -> list[ResponseSection]:
                 claim_ids=[claim.id],
             )
         )
-        if len(sections) >= 6:
-            break
     return sections
 
 

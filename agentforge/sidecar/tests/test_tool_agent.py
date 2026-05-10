@@ -151,7 +151,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        matches = search_sources(request, "what major issues does this patient have?", [], 5)
+        matches = search_sources(request, "what major issues does this patient have?", [])
         self.assertTrue(matches)
         self.assertEqual(matches[0]["record_type"], "problem")
         self.assertEqual(matches[0]["id"], "problem-9")
@@ -182,7 +182,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        matches = search_sources(request, "what allergies should I know?", [], 5)
+        matches = search_sources(request, "what allergies should I know?", [])
         self.assertTrue(matches)
         self.assertEqual(matches[0]["record_type"], "allergy")
         self.assertEqual(matches[0]["id"], "allergy-2")
@@ -214,7 +214,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        matches = search_sources(request, "tell me about this patient's labs", ["lab"], 5)
+        matches = search_sources(request, "tell me about this patient's labs", ["lab"])
 
         self.assertTrue(matches)
         self.assertEqual(matches[0]["record_type"], "document_fact")
@@ -254,7 +254,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        matches = search_sources(request, "How are this patient's labs?", ["lab"], 5)
+        matches = search_sources(request, "How are this patient's labs?", ["lab"])
 
         self.assertTrue(matches)
         self.assertEqual(matches[0]["id"], "document-fact-cbc-platelets")
@@ -292,12 +292,13 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        summary = summarize_by_type(request, ["problem"], 1)
+        summary = summarize_by_type(request, ["problem"])
 
         self.assertEqual(len(summary), 1)
         self.assertEqual(summary[0]["record_type"], "problem")
         self.assertEqual(summary[0]["count"], 2)
         self.assertEqual(summary[0]["representative_sources"][0]["id"], "problem-2")
+        self.assertEqual(summary[0]["representative_sources"][1]["id"], "problem-1")
 
     def test_check_allergy_conflicts_surfaces_overlap_and_allergy_management_meds(self):
         request = _request().model_copy(
@@ -359,7 +360,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        facts = get_document_facts(request, document_type="intake_form", field_group="phone_numbers", limit=8)
+        facts = get_document_facts(request, document_type="intake_form", field_group="phone_numbers")
 
         self.assertEqual(
             [fact["id"] for fact in facts],
@@ -381,7 +382,6 @@ class ToolAgentTest(unittest.TestCase):
             request,
             document_type="intake_form",
             fields=["emergency_contact_phone"],
-            limit=8,
         )
 
         self.assertEqual(len(facts), 1)
@@ -396,7 +396,7 @@ class ToolAgentTest(unittest.TestCase):
             }
         )
 
-        facts = get_document_facts(request, document_type="intake_form", field_group="nope", limit=8)
+        facts = get_document_facts(request, document_type="intake_form", field_group="nope")
 
         self.assertEqual(facts, [])
 

@@ -226,7 +226,7 @@ class ClinicalPlannerTest(unittest.TestCase):
         self.assertFalse(any(source.id in plan.selected_source_ids for source in document_sources))
         self.assertTrue(all(source.id in plan.selected_source_ids for source in chart_sources))
 
-    def test_broad_brief_reserves_source_budget_across_categories(self):
+    def test_broad_brief_keeps_all_matching_sources_across_categories(self):
         sources = [
             EvidenceSource(
                 id=f"problem-{index}",
@@ -265,11 +265,11 @@ class ClinicalPlannerTest(unittest.TestCase):
         plan = plan_evidence(_request("Give me a one-minute pre-round summary for this patient.", sources))
 
         selected = set(plan.selected_source_ids)
-        self.assertLessEqual(len([source_id for source_id in selected if source_id.startswith("problem-")]), 3)
+        self.assertEqual(len([source_id for source_id in selected if source_id.startswith("problem-")]), 5)
         self.assertTrue({"medication-1", "medication-2", "medication-3"} <= selected)
-        self.assertGreaterEqual(len([source_id for source_id in selected if source_id.startswith("allergy-")]), 3)
+        self.assertEqual(len([source_id for source_id in selected if source_id.startswith("allergy-")]), 4)
 
-    def test_first_room_plan_does_not_let_problems_crowd_out_meds_and_allergies(self):
+    def test_first_room_plan_keeps_problems_meds_and_allergies(self):
         request = _request(
             "What should I ask the patient first when I enter the room?",
             [
@@ -304,7 +304,7 @@ class ClinicalPlannerTest(unittest.TestCase):
 
         self.assertIn("medication-1", plan.selected_source_ids)
         self.assertIn("allergy-1", plan.selected_source_ids)
-        self.assertLessEqual(len([source_id for source_id in plan.selected_source_ids if source_id.startswith("problem-")]), 3)
+        self.assertEqual(len([source_id for source_id in plan.selected_source_ids if source_id.startswith("problem-")]), 5)
 
     def test_change_since_review_plan_selects_recent_notes(self):
         request = _request(

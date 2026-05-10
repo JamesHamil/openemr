@@ -31,6 +31,10 @@ export interface EncounterItem extends ClinicalItem {
   endDate?: string;
   provider?: string;
   dateSort: number;
+  sourceType?: 'encounter' | 'document' | 'fhir';
+  encounterId?: string;
+  documentId?: string;
+  reviewDate?: string;
 }
 
 export interface DashboardCard {

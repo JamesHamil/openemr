@@ -12,7 +12,13 @@ interface CalendarDay {
   encounters: EncounterItem[];
 }
 
-export function EncounterCalendar({ state, emptyMessage }: { state: LoadState<EncounterItem[]>; emptyMessage: string }) {
+interface EncounterCalendarProps {
+  state: LoadState<EncounterItem[]>;
+  emptyMessage: string;
+  onReviewVisit?: (encounter: EncounterItem) => void;
+}
+
+export function EncounterCalendar({ state, emptyMessage, onReviewVisit }: EncounterCalendarProps) {
   if (state.status === 'loading') {
     return <EncounterShell countLabel="" message="Loading" />;
   }
@@ -22,10 +28,16 @@ export function EncounterCalendar({ state, emptyMessage }: { state: LoadState<En
   if (state.data.length === 0) {
     return <EncounterShell countLabel="0" message={emptyMessage} />;
   }
-  return <LoadedEncounterCalendar encounters={state.data} />;
+  return <LoadedEncounterCalendar encounters={state.data} onReviewVisit={onReviewVisit} />;
 }
 
-function LoadedEncounterCalendar({ encounters }: { encounters: EncounterItem[] }) {
+function LoadedEncounterCalendar({
+  encounters,
+  onReviewVisit,
+}: {
+  encounters: EncounterItem[];
+  onReviewVisit?: (encounter: EncounterItem) => void;
+}) {
   const encountersByDate = useMemo(() => groupEncountersByDate(encounters), [encounters]);
   const firstVisitKey = encounterDateKey(encounters[0]);
   const [view, setView] = useState<CalendarView>('month');
@@ -78,6 +90,7 @@ function LoadedEncounterCalendar({ encounters }: { encounters: EncounterItem[] }
         {view === 'all' ? (
           <AllVisitsView
             encounters={encounters}
+            onReviewVisit={onReviewVisit}
             onSelectEncounter={(encounter) => {
               setSelectedDateKey(encounterDateKey(encounter));
               setView('month');
@@ -91,9 +104,16 @@ function LoadedEncounterCalendar({ encounters }: { encounters: EncounterItem[] }
           <WeekView days={weekDays} selectedDateKey={selectedDateKey} onSelectDate={setSelectedDateKey} />
         ) : null}
         {view === 'day' ? (
-          <DayView date={selectedDate} encounters={selectedEncounters} />
+          <DayView date={selectedDate} encounters={selectedEncounters} onReviewVisit={onReviewVisit} />
         ) : null}
-        {view === 'all' ? null : <VisitDetailsPanel date={selectedDate} encounters={selectedEncounters} totalVisits={encounters.length} />}
+        {view === 'all' ? null : (
+          <VisitDetailsPanel
+            date={selectedDate}
+            encounters={selectedEncounters}
+            totalVisits={encounters.length}
+            onReviewVisit={onReviewVisit}
+          />
+        )}
       </div>
     </section>
   );
@@ -101,9 +121,11 @@ function LoadedEncounterCalendar({ encounters }: { encounters: EncounterItem[] }
 
 function AllVisitsView({
   encounters,
+  onReviewVisit,
   onSelectEncounter,
 }: {
   encounters: EncounterItem[];
+  onReviewVisit?: (encounter: EncounterItem) => void;
   onSelectEncounter: (encounter: EncounterItem) => void;
 }) {
   return (
@@ -117,7 +139,7 @@ function AllVisitsView({
       <ol>
         {encounters.map((encounter) => (
           <li key={encounter.id}>
-            <button type="button" onClick={() => onSelectEncounter(encounter)}>
+            <button className="af-visit-all-view__jump" type="button" onClick={() => onSelectEncounter(encounter)}>
               <time dateTime={encounter.startDate}>{formatEncounterDate(encounter.startDate)}</time>
               <span>
                 <strong>{encounter.title}</strong>
@@ -125,6 +147,11 @@ function AllVisitsView({
                 <em>{[encounter.provider, encounter.status].filter(Boolean).join(' - ')}</em>
               </span>
             </button>
+            {canReviewVisit(encounter, onReviewVisit) ? (
+              <button className="af-visit-review-button" type="button" onClick={() => onReviewVisit(encounter)}>
+                {reviewActionLabel(encounter)}
+              </button>
+            ) : null}
           </li>
         ))}
       </ol>
@@ -172,14 +199,22 @@ function WeekView({
   );
 }
 
-function DayView({ date, encounters }: { date: Date; encounters: EncounterItem[] }) {
+function DayView({
+  date,
+  encounters,
+  onReviewVisit,
+}: {
+  date: Date;
+  encounters: EncounterItem[];
+  onReviewVisit?: (encounter: EncounterItem) => void;
+}) {
   return (
     <div className="af-visit-day-view" aria-label={`${longDateLabel(date)} visits`}>
       <div className="af-visit-day-view__date">
         <span>{date.toLocaleDateString(undefined, { weekday: 'long' })}</span>
         <strong>{longDateLabel(date)}</strong>
       </div>
-      <VisitTimeline encounters={encounters} emptyMessage="No visits recorded for this day." />
+      <VisitTimeline encounters={encounters} emptyMessage="No visits recorded for this day." onReviewVisit={onReviewVisit} />
     </div>
   );
 }
@@ -225,7 +260,17 @@ function CalendarDayButton({
   );
 }
 
-function VisitDetailsPanel({ date, encounters, totalVisits }: { date: Date; encounters: EncounterItem[]; totalVisits: number }) {
+function VisitDetailsPanel({
+  date,
+  encounters,
+  totalVisits,
+  onReviewVisit,
+}: {
+  date: Date;
+  encounters: EncounterItem[];
+  totalVisits: number;
+  onReviewVisit?: (encounter: EncounterItem) => void;
+}) {
   return (
     <aside className="af-visit-list" aria-label="Selected day visit information">
       <div className="af-visit-list__header">
@@ -235,12 +280,24 @@ function VisitDetailsPanel({ date, encounters, totalVisits }: { date: Date; enco
         </div>
         <span>{encounters.length}</span>
       </div>
-      <VisitTimeline encounters={encounters} emptyMessage="Select a highlighted day to review visit information." />
+      <VisitTimeline
+        encounters={encounters}
+        emptyMessage="Select a highlighted day to review visit information."
+        onReviewVisit={onReviewVisit}
+      />
     </aside>
   );
 }
 
-function VisitTimeline({ encounters, emptyMessage }: { encounters: EncounterItem[]; emptyMessage: string }) {
+function VisitTimeline({
+  encounters,
+  emptyMessage,
+  onReviewVisit,
+}: {
+  encounters: EncounterItem[];
+  emptyMessage: string;
+  onReviewVisit?: (encounter: EncounterItem) => void;
+}) {
   if (!encounters.length) {
     return <div className="af-visit-list__empty">{emptyMessage}</div>;
   }
@@ -254,11 +311,27 @@ function VisitTimeline({ encounters, emptyMessage }: { encounters: EncounterItem
             <strong>{encounter.title}</strong>
             <p>{encounter.detail}</p>
             <span>{[encounter.provider, encounter.status].filter(Boolean).join(' - ')}</span>
+            {canReviewVisit(encounter, onReviewVisit) ? (
+              <button className="af-visit-review-button" type="button" onClick={() => onReviewVisit(encounter)}>
+                {reviewActionLabel(encounter)}
+              </button>
+            ) : null}
           </div>
         </li>
       ))}
     </ol>
   );
+}
+
+function canReviewVisit(
+  encounter: EncounterItem,
+  onReviewVisit: ((encounter: EncounterItem) => void) | undefined
+): onReviewVisit is (encounter: EncounterItem) => void {
+  return Boolean(onReviewVisit && ((encounter.sourceType === 'encounter' && encounter.encounterId) || (encounter.sourceType === 'document' && encounter.documentId)));
+}
+
+function reviewActionLabel(encounter: EncounterItem): string {
+  return encounter.sourceType === 'document' ? 'Open document' : 'Review encounter';
 }
 
 function EncounterShell({ countLabel, message, tone = 'muted' }: { countLabel: string; message: string; tone?: 'muted' | 'error' }) {

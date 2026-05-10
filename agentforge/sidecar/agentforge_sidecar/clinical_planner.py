@@ -411,7 +411,7 @@ def _select_sources_for_family(
     sources = request.evidence_bundle.sources
     selected: list[EvidenceSource] = []
 
-    def add(matches: list[EvidenceSource], limit: int | None = None) -> None:
+    def add(matches: list[EvidenceSource]) -> None:
         for source in _newest_first(matches):
             if source.id not in {item.id for item in selected}:
                 selected.append(source)

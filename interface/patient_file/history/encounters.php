@@ -244,6 +244,8 @@ function agentforgeCollectVisitHistoryDocuments(int $pid): array
             'startDate' => $date,
             'provider' => xl('Records'),
             'dateSort' => strtotime($date) ?: 0,
+            'sourceType' => 'document',
+            'documentId' => (string) $document['id'],
         ];
     }
 
@@ -323,6 +325,9 @@ function agentforgeCollectVisitHistoryEncounters($session, int $pid, bool $authN
             'startDate' => $date,
             'provider' => agentforgeEncounterProviderName($encounter),
             'dateSort' => strtotime($date) ?: 0,
+            'sourceType' => 'encounter',
+            'encounterId' => (string) $encounter['encounter'],
+            'reviewDate' => oeFormatShortDate($date),
         ];
     }
 
@@ -341,6 +346,7 @@ function agentforgeCollectVisitHistoryPayload($session, int $pid, bool $authNote
 
     return [
         'patient' => [
+            'id' => (string) $pid,
             'name' => getPatientNameFirstLast($pid),
             'dateOfBirth' => $dob !== '' ? oeFormatShortDate($dob) : xl('Unknown DOB'),
             'mrn' => $externalId,
@@ -350,6 +356,8 @@ function agentforgeCollectVisitHistoryPayload($session, int $pid, bool $authNote
             'data' => $visits,
         ],
         'billingUrl' => 'encounters.php?billing=1&issue=0',
+        'documentBaseUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/controller.php',
+        'encounterBaseUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/interface/patient_file/encounter/encounter_top.php',
     ];
 }
 
@@ -442,11 +450,9 @@ function toencounter(rawdata) {
 function todocument(docid) {
   const params = new URLSearchParams({
     doc_id: docid,
-    document: '',
-    patient_id: <?php echo js_escape($pid); ?>,
-    view: ''
+    patient_id: <?php echo js_escape($pid); ?>
   });
-  h = '<?php echo OEGlobalsBag::getInstance()->getWebRoot() ?>/controller.php?' + params;
+  h = '<?php echo OEGlobalsBag::getInstance()->getWebRoot() ?>/controller.php?document&view&' + params;
   top.restoreSession();
   location.href = h;
 }

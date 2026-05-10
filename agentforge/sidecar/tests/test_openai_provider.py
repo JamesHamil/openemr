@@ -611,7 +611,7 @@ class OpenAIProviderTest(unittest.TestCase):
         plan = plan_evidence(request)
         selected = _selected_sources(request, list(plan.selected_source_ids), _selected_source_limit(plan))
 
-        self.assertEqual(_selected_source_limit(plan), 24)
+        self.assertIsNone(_selected_source_limit(plan))
         self.assertEqual(len(selected), 3)
         self.assertFalse(any(source.id in {item.id for item in selected} for source in document_sources))
         self.assertTrue(all(source.id in {item.id for item in selected} for source in chart_sources))
