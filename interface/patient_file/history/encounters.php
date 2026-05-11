@@ -25,7 +25,6 @@ if (\OpenEMR\Core\OEGlobalsBag::getInstance()->getBoolean('enable_group_therapy'
     require_once("$srcdir/group.inc.php");
 }
 
-use OpenEMR\BC\ServiceContainer;
 use OpenEMR\Billing\BillingUtilities;
 use OpenEMR\Billing\InvoiceSummary;
 use OpenEMR\Common\Acl\AclMain;
@@ -37,7 +36,19 @@ use OpenEMR\Common\Session\SessionWrapperFactory;
 use OpenEMR\Core\Header;
 use OpenEMR\Core\OEGlobalsBag;
 
-$session = SessionWrapperFactory::getInstance()->getActiveSession();
+$sessionFactory = SessionWrapperFactory::getInstance();
+if (method_exists($sessionFactory, 'getActiveSession')) {
+    $session = $sessionFactory->getActiveSession();
+} elseif (method_exists($sessionFactory, 'getWrapper')) {
+    $session = $sessionFactory->getWrapper();
+} else {
+    $session = new class {
+        public function get(string $key, mixed $default = null): mixed
+        {
+            return $_SESSION[$key] ?? $default;
+        }
+    };
+}
 
 $is_group = ($attendant_type == 'gid') ? true : false;
 
@@ -83,9 +94,8 @@ if (isset($_GET['billing'])) {
 
 // form locator will cache form locations (so modules can extend)
 // form report renderer will render the form reports
-$logger = ServiceContainer::getLogger();
-$formLocator = new FormLocator($logger);
-$formReportRenderer = new FormReportRenderer($formLocator, $logger);
+$formLocator = new FormLocator();
+$formReportRenderer = new FormReportRenderer($formLocator);
 
 //Get Document List by Encounter ID
 function getDocListByEncID($encounter, $raw_encounter_date, $pid): void
@@ -117,7 +127,7 @@ function getDocListByEncID($encounter, $raw_encounter_date, $pid): void
             }
             $docTitle = $note ?: xl("View document");
 
-            $docHref = OEGlobalsBag::getInstance()->getWebRoot() . "/controller.php?document&view&patient_id=" . attr_url($pid) . "&doc_id=" . attr_url($documentrow['id']);
+            $docHref = agentforgeVisitHistoryWebRoot() . "/controller.php?document&view&patient_id=" . attr_url($pid) . "&doc_id=" . attr_url($documentrow['id']);
             echo "<div class='text docrow' id='" . attr($documentrow['id']) . "'data-toggle='tooltip' data-placement='top' title='" . attr($docTitle) . "'>\n";
             echo "<a href='$docHref' onclick='top.restoreSession()' >" . xlt('Document') . ": " . text($documentrow['document_name'])  . '-' . $documentrow['id'] . ' (' . text(xl_document_category($documentrow['name'])) . ')' . "</a>";
             echo "</div>";
@@ -187,10 +197,15 @@ function agentforgeVisitHistoryAssetUrl(string $asset): string
 {
     $assetVersion = (string) OEGlobalsBag::getInstance()->get('v_js_includes') . '-20260510-doc-param-order';
 
-    return OEGlobalsBag::getInstance()->getWebRoot()
+    return agentforgeVisitHistoryWebRoot()
         . "/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets/"
         . rawurlencode($asset)
         . "?v=" . rawurlencode($assetVersion);
+}
+
+function agentforgeVisitHistoryWebRoot(): string
+{
+    return (string) ($GLOBALS['webroot'] ?? '');
 }
 
 function agentforgeEncounterProviderName(array $encounter): string
@@ -358,8 +373,8 @@ function agentforgeCollectVisitHistoryPayload($session, int $pid, bool $authNote
             'data' => $visits,
         ],
         'billingUrl' => 'encounters.php?billing=1&issue=0',
-        'documentBaseUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/controller.php',
-        'encounterBaseUrl' => OEGlobalsBag::getInstance()->getWebRoot() . '/interface/patient_file/encounter/encounter_top.php',
+        'documentBaseUrl' => agentforgeVisitHistoryWebRoot() . '/controller.php',
+        'encounterBaseUrl' => agentforgeVisitHistoryWebRoot() . '/interface/patient_file/encounter/encounter_top.php',
     ];
 }
 
@@ -420,7 +435,7 @@ if (
 <!-- Not sure why we don't want this ui to be B.S responsive. -->
 <?php Header::setupHeader(['no_textformat']); ?>
 
-<script src="<?php echo OEGlobalsBag::getInstance()->getWebRoot() ?>/library/js/ajtooltip.js"></script>
+<script src="<?php echo attr(agentforgeVisitHistoryWebRoot()) ?>/library/js/ajtooltip.js"></script>
 
 <script>
 
@@ -454,7 +469,7 @@ function todocument(docid) {
     patient_id: <?php echo js_escape($pid); ?>,
     doc_id: docid
   });
-  h = '<?php echo OEGlobalsBag::getInstance()->getWebRoot() ?>/controller.php?document&view&' + params;
+  h = '<?php echo js_escape(agentforgeVisitHistoryWebRoot()) ?>/controller.php?document&view&' + params;
   top.restoreSession();
   location.href = h;
 }

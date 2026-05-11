@@ -82,8 +82,8 @@ if (method_exists($agentforgeGlobals, 'getKernel')) {
     }
 }
 
-if (!isset($pid)) {
-    $pid = $session->get('pid') ?? $_GET['pid'] ?? null;
+if (!isset($pid) || $pid === null || $pid === '') {
+    $pid = $session->get('pid') ?? ($_GET['set_pid'] ?? ($_GET['pid'] ?? null));
 }
 
 // Reset the previous name flag to allow normal operation.
@@ -100,7 +100,8 @@ try {
 // Set session for pid (via setpid). Also set session for encounter (if applicable)
 if (isset($_GET['set_pid'])) {
     require_once("$srcdir/pid.inc.php");
-    setpid($_GET['set_pid']);
+    $pid = (int)$_GET['set_pid'];
+    setpid($pid);
     $ptService = new PatientService();
     $newPatient = $ptService->findByPid($pid);
     $ptService->touchRecentPatientList($newPatient);
@@ -185,6 +186,11 @@ function agentforgeModernDashboardText($value): string
 function agentforgeModernDashboardArray($value): array
 {
     return is_array($value) ? $value : [];
+}
+
+function agentforgeDashboardWebRoot(): string
+{
+    return (string)($GLOBALS['webroot'] ?? '');
 }
 
 function agentforgeDashboardCsrfToken(): string
@@ -1213,7 +1219,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         pid: pid,
                         rule_id: ruleId
                     });
-                    let launchUrl = "<?php echo OEGlobalsBag::getInstance()->getWebRoot(); ?>/interface/super/rules/index.php?" + params;
+                    let launchUrl = <?php echo js_escape(agentforgeDashboardWebRoot() . '/interface/super/rules/index.php?'); ?> + params;
                     e.preventDefault();
                     e.stopPropagation();
                     // as we're loading another iframe, make sure to sync session
@@ -1467,13 +1473,17 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
         //
         function setMyPatient() {
             <?php
-            if (isset($_GET['set_pid'])) {
+            if (!empty($pid)) {
                 $date_of_death = is_patient_deceased($pid);
                 if (!empty($date_of_death)) {
                     $date_of_death = $date_of_death['date_deceased'];
                 }
                 ?>
-            parent.left_nav.setPatient(<?php echo js_escape($result['fname'] . " " . $result['lname']) .
+            const leftNav = (parent && parent.left_nav) ? parent.left_nav : ((top && top.left_nav) ? top.left_nav : null);
+            if (!leftNav) {
+                return;
+            }
+            leftNav.setPatient(<?php echo js_escape($result['fname'] . " " . $result['lname']) .
                     "," . js_escape($pid) . "," . js_escape($result['pubpid']) . ",'',";
             if (empty($date_of_death)) {
                 echo js_escape(" " . xl('DOB') . ": " . oeFormatShortDate($result['DOB_YMD']) . " " . xl('Age') . ": " . getPatientAgeDisplay($result['DOB_YMD']));
@@ -1498,11 +1508,13 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     }
                 }
                 ?>
-            parent.left_nav.setPatientEncounter(EncounterIdArray, EncounterDateArray, CalendarCategoryArray);
+            leftNav.setPatientEncounter(EncounterIdArray, EncounterDateArray, CalendarCategoryArray);
                 <?php
-            } // end setting new pid
+            } // end setting pid in the parent frame
             ?>
-            parent.left_nav.syncRadios();
+            if (leftNav.syncRadios) {
+                leftNav.syncRadios();
+            }
             <?php if ((isset($_GET['set_pid'])) && (isset($_GET['set_encounterid'])) && (intval($_GET['set_encounterid']) > 0)) {
                 $query_result = sqlQuery("SELECT `date` FROM `form_encounter` WHERE `encounter` = ?", [$encounter]); ?>
             const encParams = new URLSearchParams({
@@ -1510,9 +1522,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                 set_encounter: <?php echo js_escape($encounter); ?>
             });
             encurl = 'encounter/encounter_top.php?' + encParams.toString();
-            parent.left_nav.setEncounter(<?php echo js_escape(oeFormatShortDate(date("Y-m-d", strtotime((string) $query_result['date'])))); ?>, <?php echo js_escape($encounter); ?>, 'enc');
+            leftNav.setEncounter(<?php echo js_escape(oeFormatShortDate(date("Y-m-d", strtotime((string) $query_result['date'])))); ?>, <?php echo js_escape($encounter); ?>, 'enc');
             top.restoreSession();
-            parent.left_nav.loadFrame('enc2', 'enc', 'patient_file/' + encurl);
+            leftNav.loadFrame('enc2', 'enc', 'patient_file/' + encurl);
             <?php } // end setting new encounter id (only if new pid is also set)
             ?>
         }
@@ -1711,7 +1723,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'listTouched' => (!empty(getListTouch($pid, 'allergy'))) ? true : false,
                         'auth' => true,
                         'btnLabel' => 'Edit',
-                        'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=allergy')"
+                        'btnLink' => "return load_location('" . agentforgeDashboardWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=allergy')"
                     ];
                     echo "<div class=\"$col\">";
                     echo $t->render('patient/card/allergies.html.twig', $viewArgs);
@@ -1735,7 +1747,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'listTouched' => (!empty(getListTouch($pid, 'medical_problem'))) ? true : false,
                         'auth' => true,
                         'btnLabel' => 'Edit',
-                        'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medical_problem')"
+                        'btnLink' => "return load_location('" . agentforgeDashboardWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medical_problem')"
                     ];
                     echo "<div class=\"$col\">";
                     echo $t->render('patient/card/medical_problems.html.twig', $viewArgs);
@@ -1757,7 +1769,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                         'listTouched' => (!empty(getListTouch($pid, 'medication'))) ? true : false,
                         'auth' => true,
                         'btnLabel' => 'Edit',
-                        'btnLink' => "return load_location('" . OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medication')"
+                        'btnLink' => "return load_location('" . agentforgeDashboardWebRoot() . "/interface/patient_file/summary/stats_full.php?active=all&category=medication')"
                     ];
                     echo "<div class=\"$col\">";
                     echo $t->render('patient/card/medication.html.twig', $viewArgs);
@@ -1805,9 +1817,9 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                     if (OEGlobalsBag::getInstance()->getBoolean('erx_enable')) {
                         $viewArgs['title'] = 'Prescription History';
                         $viewArgs['btnLabel'] = 'Add';
-                        $viewArgs['btnLink'] = OEGlobalsBag::getInstance()->getWebRoot() . "/interface/eRx.php?page=compose";
+                        $viewArgs['btnLink'] = agentforgeDashboardWebRoot() . "/interface/eRx.php?page=compose";
                     } else {
-                        $viewArgs['btnLink'] = "editScripts('" . OEGlobalsBag::getInstance()->getWebRoot() . "/controller.php?prescription&list&id=" . attr_url($pid) . "')";
+                        $viewArgs['btnLink'] = "editScripts('" . agentforgeDashboardWebRoot() . "/controller.php?prescription&list&id=" . attr_url($pid) . "')";
                         $viewArgs['linkMethod'] = "javascript";
                         $viewArgs['btnClass'] = "iframe";
                     }
@@ -2042,7 +2054,7 @@ $oemr_ui = new OemrUI($arrOeUiSettings);
                             'id' => $id,
                             'initiallyCollapsed' => (getUserSetting($id) == 0) ? true : false,
                             'btnLabel' => 'Edit',
-                            'btnLink' => OEGlobalsBag::getInstance()->getWebRoot() . "/interface/patient_file/summary/list_amendments.php?id=" . attr_url($pid),
+                            'btnLink' => agentforgeDashboardWebRoot() . "/interface/patient_file/summary/list_amendments.php?id=" . attr_url($pid),
                             'btnCLass' => '',
                             'linkMethod' => 'html',
                             'bodyClass' => 'notab collapse show',

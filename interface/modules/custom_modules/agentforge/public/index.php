@@ -13,7 +13,6 @@ require_once(__DIR__ . "/../src/AgentForgeOpenEmrCompat.php");
 
 use OpenEMR\Common\Acl\AclMain;
 use OpenEMR\Core\Header;
-use OpenEMR\Core\OEGlobalsBag;
 
 $session = agentforge_openemr_session();
 $pid = (string)agentforge_session_get($session, 'pid', '');
@@ -23,10 +22,10 @@ $authorized = AclMain::aclCheckCore('patients', 'demo') || AclMain::aclCheckCore
 
 function agentforge_copilot_asset_url(string $asset): string
 {
-    return OEGlobalsBag::getInstance()->getWebRoot()
+    return (string)($GLOBALS['webroot'] ?? '')
         . "/interface/modules/custom_modules/agentforge/public/patient-dashboard/assets/"
         . rawurlencode($asset)
-        . "?v=" . rawurlencode((string) OEGlobalsBag::getInstance()->get('v_js_includes'));
+        . "?v=" . rawurlencode((string)($GLOBALS['v_js_includes'] ?? 'agentforge'));
 }
 
 $webroot = (string)($GLOBALS['webroot'] ?? '');
